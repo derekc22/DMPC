@@ -2,6 +2,8 @@
 
 This project implements Distributed and Decentralized Model Predictive Control (DMPC) strategies for multi-agent systems using **CasADi**.
 
+<img src="plots/drone_decentralized_mpc_gauss-seidel_xyz.png" width="450">
+
 ## Features
 
 ### Control Architectures
@@ -22,9 +24,9 @@ This project implements Distributed and Decentralized Model Predictive Control (
 - *Custom*: Specify your own integrator.
 
 ### Constraints
-- **Control Constraints**: Specify minimum and maximum control inputs.
-- **Inter-agent Collision Avoidance**: Specify minimum distance between agents.
-- **Obstacle Avoidance**: Customizable static obstacles in the environment. Dynamic obstacles planned.
+- **Control constraints**: Specify minimum and maximum control inputs.
+- **Inter-agent collision avoidance**: Specify minimum distance between agents.
+- **Obstacle avoidance**: Customizable static obstacles in the environment. Dynamic obstacles planned.
 
 ### Stochasticity and Uncertainty
 Planned.

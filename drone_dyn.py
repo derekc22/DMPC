@@ -62,7 +62,7 @@ def eul2rotm_zyx(yaw, pitch, roll):
 # =========================================================================
 
 # number of agents
-M = 10
+M = 3
 
 # minimum separation distance
 d_min = 0.2
