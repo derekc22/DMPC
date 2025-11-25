@@ -101,12 +101,12 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
             for m in range(M):
                 set_XYZ_others(m)
 
-        # set initial-state parameters
         for m in range(M):
             
             if mode == "gauss-seidel":
                 set_XYZ_others(m)
             
+            # set initial-state parameters
             opti = agents[m]["opti"]
             X = agents[m]["X"]
             U = agents[m]["U"]

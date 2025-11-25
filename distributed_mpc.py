@@ -100,7 +100,7 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
 
         opti.set_value(planner["x0"], Xk.reshape(M * nx, 1))
         opti.set_initial(X, pred_X) # warm start
-        opti.set_initial(U, pred_U)     # warm start
+        opti.set_initial(U, pred_U) # warm start
         
         sol = opti.solve()
         X_opt = sol.value(X)
