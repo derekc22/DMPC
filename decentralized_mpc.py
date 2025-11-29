@@ -1,6 +1,6 @@
 import numpy as np
 import casadi as ca
-from plot import plot_t, plot_xyz
+from plot import *
 
 def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
     
@@ -142,3 +142,4 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
     J_cl_avg = np.mean(J_cl)
     plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, f"{dyn}_decentralized", mode)
     plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_decentralized", mode)
+    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_decentralized")

@@ -2,7 +2,7 @@
 
 This project implements Distributed and Decentralized Model Predictive Control (DMPC) strategies for multi-agent systems using **CasADi**.
 
-<img src="archive/plots/drone_decentralized_mpc_gauss-seidel_xyz.png" width="475">
+<img src="media/thumbnail.gif" width="475">
 
 ## Features
 

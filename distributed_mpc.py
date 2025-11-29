@@ -1,6 +1,6 @@
 import numpy as np
 import casadi as ca
-from plot import plot_t, plot_xyz
+from plot import *
 
 def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
 
