@@ -1,7 +1,9 @@
 import casadi as ca
 import numpy as np
-from distributed_mpc import dmpc_distributed
-from decentralized_mpc import dmpc_decentralized
+from src.distributed_mpc import dmpc_distributed
+from src.decentralized_mpc import dmpc_decentralized
+from src.decentralized_mpc_client import dmpc_decentralized_client
+from src.distributed_mpc_client import dmpc_distributed_client
 
 # =========================================================================
 # HELPERS
@@ -62,10 +64,10 @@ def eul2rotm_zyx(yaw, pitch, roll):
 # =========================================================================
 
 # number of agents
-M = 10
+M = 5
 
 # minimum separation distance
-d_min = 0.2
+d_min = 0.01
 
 # discretization
 N = 40
@@ -111,7 +113,7 @@ F_min = 0      # [N]
 F_max = 20.0   # [N]
 
 # number of obstacles
-n_obs = 5
+n_obs = 0
 x_obs = np.hstack([np.random.uniform(-10, 10, (n_obs, 2)), 10*np.ones((n_obs, 1))])
 r_obs = np.random.uniform(1, 5, (n_obs, 1))
 obs = np.hstack([x_obs, r_obs])
@@ -336,6 +338,9 @@ def f_np(x, u):
 # MPC CALLS
 # =========================================================================
 
-# dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "drone")
 dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
-# dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
+dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
+dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "drone")
+dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
+dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
+dmpc_distributed_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "drone")

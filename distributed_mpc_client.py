@@ -2,7 +2,7 @@ import numpy as np
 import casadi as ca
 from plot import *
 
-def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
+def dmpc_distributed_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_client, f, f_np, sigma, obs, Q, R, H, term, dyn):
 
     t_max = N * dt
 
@@ -21,7 +21,9 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
         xf = opti.parameter(M * nx, 1)
 
         # set final states
-        opti.set_value(xf, xf_val.reshape((M * nx, 1)))
+        x0_val_client = x0_val[0].reshape(nx, 1)
+        xf_val = np.vstack([ xf_val_client.reshape(nx, 1), np.tile(x0_val_client, (M-1, 1)) ])
+        opti.set_value(xf, xf_val)
         
         # control bounds and initial condition constraint
         opti.subject_to(X[:, 0] == x0)
@@ -64,9 +66,13 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
                 opti.subject_to(xN == xf) # terminal constraint, xf
 
         # push initial interpolated predictions for warm-starting
-        for m in range(M):
+        x0_client = x0_val_client
+        xf_client = xf_val_client.reshape(nx, 1)
+        pred_X[nx * 0 : nx * (0 + 1), :] = np.hstack([x0_client + (k / float(N)) * (xf_client - x0_client) for k in range(N + 1)])
+        
+        for m in range(1, M):
             x0_m = x0_val[m, :].reshape(nx, 1)
-            xf_m = xf_val[m, :].reshape(nx, 1)
+            xf_m = x0_val_client
             pred_X[nx * m : nx * (m + 1), :] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
         
         opti.minimize(J)
@@ -81,6 +87,10 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
     # helpers
     def shift_pred(X):
         return np.hstack([X[:, 1:], X[:, -1:]])
+    
+    def set_XYZ_client(xt_val_client):
+        xt_val = np.vstack([ xf_val_client.reshape(nx, 1), np.tile(xt_val_client.reshape(nx, 1), (M-1, 1)) ])
+        planner["opti"].set_value(planner["xf"], xt_val)
 
     # logs for plotting
     x_cl = np.zeros((M, nx, N + 1), dtype=float)
@@ -89,6 +99,9 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
     J_cl = np.zeros((N))
 
     Xk = x0_val.copy()
+    
+    # store current position of client
+    xt_val_client = x0_val[0, :]
 
     # receding-horizon loop
     for k in range(N):
@@ -110,7 +123,8 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
         pred_X = shift_pred(X_opt)  # update shared predictions
         pred_U = shift_pred(U_opt)  # update shared predictions
 
-        
+        set_XYZ_client(xt_val_client)
+
         for m in range(M):
             uk = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
 
@@ -123,11 +137,14 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
             
             Xk[m] = xk_1.flatten()
             
+            if m == 0:
+                xt_val_client = Xk[0]
+            
         J_cl[k] = sol.value(J)
 
             
     # plot
     J_cl_avg = np.mean(J_cl)/M
-    plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, f"{dyn}_distributed")
-    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_distributed")
-    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_distributed")
+    plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, f"{dyn}_distributed_client")
+    plot_xyz(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_distributed_client")
+    animate_xyz_gif(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_distributed_client")

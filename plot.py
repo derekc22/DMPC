@@ -44,7 +44,7 @@ def plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, fname, qualifier=""):
 
     plt.suptitle(f'{fname} mpc x_cl, Jbar = {J_cl_avg:.3f}')
     plt.tight_layout()
-    plt.savefig(f"plots/{fname}_mpc{('_' + qualifier) if qualifier else ''}_x_cl.png")
+    plt.savefig(f"figures{fname}_mpc{('_' + qualifier) if qualifier else ''}_x_cl.png")
     plt.close()
 
     # ------------------------------------------------------------
@@ -72,7 +72,7 @@ def plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, fname, qualifier=""):
 
     plt.suptitle(f'{fname} mpc u_cl, Jbar = {J_cl_avg:.3f}')
     plt.tight_layout()
-    plt.savefig(f"plots/{fname}_mpc{('_' + qualifier) if qualifier else ''}_u_cl.png")
+    plt.savefig(f"figures{fname}_mpc{('_' + qualifier) if qualifier else ''}_u_cl.png")
     plt.close()
 
 
@@ -96,7 +96,11 @@ def plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier=""):
         line, = ax.plot3D(x, y, z, label=f"agent {m}", marker="o", linestyle="-")#, markersize=3)
         color = line.get_color()
         ax.scatter(x0_val[m, 0], x0_val[m, 1], x0_val[m, 2], c=color, marker=".", s=200, edgecolors="black")
-        ax.scatter(xf_val[m, 0], xf_val[m, 1], xf_val[m, 2], c=color, marker="*", s=300, edgecolors="black")
+        if not "client" in fname:
+            ax.scatter(xf_val[m, 0], xf_val[m, 1], xf_val[m, 2], c=color, marker="*", s=300, edgecolors="black")
+        else:
+            if m == 0:
+                ax.scatter(xf_val[0], xf_val[1], xf_val[2], c=color, marker="*", s=300, edgecolors="black")
 
     # draw all obstacles
     u = np.linspace(0, 2 * np.pi, 40)
@@ -138,7 +142,7 @@ def plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier=""):
 
     plt.title(f'{fname} mpc, Jbar = {J_cl_avg:.3f}')
     plt.tight_layout()
-    plt.savefig(f"plots/{fname}_mpc{('_' + qualifier) if qualifier else ''}_xyz.png")
+    plt.savefig(f"figures{fname}_mpc{('_' + qualifier) if qualifier else ''}_xyz.png")
     plt.close()
 
 
@@ -146,7 +150,7 @@ def plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier=""):
 
 
 
-def animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier="", fps=20):
+def animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier="", fps=10):
 
     os.makedirs("plots", exist_ok=True)
 
@@ -185,11 +189,13 @@ def animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier="",
 
             line, = ax.plot3D(x, y, z, label=f"agent {m}", marker="o", linestyle="-")
             color = line.get_color()
-            ax.scatter(x0_val[m, 0], x0_val[m, 1], x0_val[m, 2],
-                       c=color, marker=".", s=200, edgecolors="black")
-            ax.scatter(xf_val[m, 0], xf_val[m, 1], xf_val[m, 2],
-                       c=color, marker="*", s=300, edgecolors="black")
-
+            ax.scatter(x0_val[m, 0], x0_val[m, 1], x0_val[m, 2], c=color, marker=".", s=200, edgecolors="black")
+            if not "client" in fname:
+                ax.scatter(xf_val[m, 0], xf_val[m, 1], xf_val[m, 2], c=color, marker="*", s=300, edgecolors="black")
+            else:
+                if m == 0:
+                    ax.scatter(xf_val[0], xf_val[1], xf_val[2], c=color, marker="*", s=300, edgecolors="black")
+                
         # draw all obstacles
         u = np.linspace(0, 2 * np.pi, 40)
         v = np.linspace(0, np.pi, 40)
@@ -215,12 +221,12 @@ def animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier="",
         plt.title(f"{fname} mpc, Jbar = {J_cl_avg:.3f}")
         plt.tight_layout()
 
-        frame_path = f"plots/_frame_{k:05d}.png"
+        frame_path = f"figures_frame_{k:05d}.png"
         plt.savefig(frame_path)
         frames.append(imageio.imread(frame_path))
         plt.close(fig)
         os.remove(frame_path)
 
-    gif_path = f"plots/{fname}_mpc{('_' + qualifier) if qualifier else ''}_xyz.gif"
-    imageio.mimsave(gif_path, frames, fps=fps)
+    gif_path = f"figures{fname}_mpc{('_' + qualifier) if qualifier else ''}_xyz.gif"
+    imageio.mimsave(gif_path, frames, fps=fps, loop=0)
     

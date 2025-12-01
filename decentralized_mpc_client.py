@@ -2,7 +2,7 @@ import numpy as np
 import casadi as ca
 from plot import *
 
-def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+def dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_client, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
     
     assert mode in ("gauss-seidel", "jacobi"), f"Invalid mode: {mode}"
 
@@ -15,7 +15,7 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
     pred_U = np.zeros((M, nu, N))
 
     # build a local OCP for one agent, with other agents' XYZ as parameters
-    def build_agent_opti(m):
+    def build_agent_opti(m, xf_val_t):
         opti = ca.Opti()
         X = opti.variable(nx, N + 1)
         U = opti.variable(nu, N)
@@ -23,7 +23,8 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
         xf = opti.parameter(nx, 1)
 
         # set final state
-        opti.set_value(xf, xf_val[m, :].reshape((nx, 1)))
+        if m == 0:
+            opti.set_value(xf, xf_val_t.reshape((nx, 1)))
         
         # control bounds and initial condition constraint
         opti.subject_to(X[:, 0] == x0)
@@ -61,7 +62,7 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
 
         # push initial interpolated predictions for warm-starting
         x0_m = x0_val[m, :].reshape(nx, 1)
-        xf_m = xf_val[m, :].reshape(nx, 1)
+        xf_m = xf_val_t.reshape(nx, 1)
         pred_X[m] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
 
         opti.minimize(J)
@@ -72,7 +73,9 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
         return {"opti": opti, "X": X, "U": U, "x0": x0, "xf": xf, "XYZ_others": XYZ_others, "J" : J}
 
     # build agents and set goals
-    agents = [build_agent_opti(m) for m in range(M)]
+    x0_val_client = x0_val[0, :] # store client's current state
+    agents = [build_agent_opti(m, x0_val_client) for m in range(1, M)]
+    agents.insert(0, build_agent_opti(0, xf_val_client))
     
     # helpers
     def shift_pred(X):
@@ -85,6 +88,10 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
                 continue
             agents[m]["opti"].set_value(agents[m]["XYZ_others"][i], pred_X[j][0:3, :])
             i += 1
+            
+    def set_XYZ_client(xt_val_client):
+        for m in range(1, M):
+            agents[m]["opti"].set_value(agents[m]["xf"], xt_val_client)
 
     # logs for plotting
     x_cl = np.zeros((M, nx, N + 1), dtype=float)
@@ -93,6 +100,9 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
     J_cl = np.zeros((M, N))
 
     Xk = x0_val.copy()
+    
+    # store current position of client
+    xt_val_client = x0_val_client
 
     # receding-horizon loop
     for k in range(N):
@@ -101,11 +111,13 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
             for m in range(M):
                 set_XYZ_others(m)
 
+        set_XYZ_client(xt_val_client)
+
         for m in range(M):
             
             if mode == "gauss-seidel":
                 set_XYZ_others(m)
-            
+                
             # set initial-state parameters
             opti = agents[m]["opti"]
             X = agents[m]["X"]
@@ -136,10 +148,13 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
             Xk[m] = xk_1.flatten()
             
             J_cl[m, k] = sol.value(J)
+            
+            if m == 0:
+                xt_val_client = Xk[0]
 
             
     # plot
     J_cl_avg = np.mean(J_cl)
-    plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, f"{dyn}_decentralized", mode)
-    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_decentralized", mode)
-    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_decentralized")
+    plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, f"{dyn}_decentralized_client", mode)
+    plot_xyz(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_decentralized_client", mode)
+    animate_xyz_gif(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_decentralized_client", mode)

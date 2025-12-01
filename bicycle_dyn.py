@@ -1,7 +1,9 @@
 import casadi as ca    
 import numpy as np
-from distributed_mpc import dmpc_distributed
-from decentralized_mpc import dmpc_decentralized
+from src.distributed_mpc import dmpc_distributed
+from src.decentralized_mpc import dmpc_decentralized
+from src.decentralized_mpc_client import dmpc_decentralized_client
+from src.distributed_mpc_client import dmpc_distributed_client
 
 # =========================================================================
 # SETUP
@@ -51,7 +53,7 @@ a_min = -0.2
 a_max = 0.2
 
 # number of obstacles
-n_obs = 8
+n_obs = 0
 x_obs = np.hstack([np.random.uniform(-10, 10, (n_obs, 2)), 5*np.ones((n_obs, 1))])
 r_obs = np.random.uniform(1, 5, (n_obs, 1))
 obs = np.hstack([x_obs, r_obs])
@@ -72,7 +74,7 @@ H = ca.DM(np.eye(nx))
 # derived quantities
 x0_val = np.hstack([p0, theta0, v0])
 xf_val = np.hstack([pf, thetaf, vf])
-u_lim = [(delta_min, delta_max), (a_min, a_max)]
+U_lim = [(delta_min, delta_max), (a_min, a_max)]
 
 
 
@@ -86,23 +88,23 @@ u_lim = [(delta_min, delta_max), (a_min, a_max)]
 def f(x, u):
     theta, v = x[3], x[4]
     delta, a = u[0], u[1]
-    dx = v * ca.cos(theta)
-    dy = v * ca.sin(theta)
-    dz = [0]
-    dtheta = (v / L) * delta
-    dv = a
-    return ca.vcat([dx, dy, dz, dtheta, dv])
+    x_dot = v * ca.cos(theta)
+    y_dot = v * ca.sin(theta)
+    z_dot = [0]
+    theta_dot = (v / L) * delta
+    v_dot = a
+    return ca.vcat([x_dot, y_dot, z_dot, theta_dot, v_dot])
 
 # non-CasADi forward Euler integration
 def f_np(x, u):
     theta, v = x[3], x[4]
     delta, a = u[0], u[1]
-    dx = v * np.cos(theta)
-    dy = v * np.sin(theta)
-    dz = [0]
-    dtheta = (v / L) * delta
-    dv = a
-    return np.array([dx, dy, dz, dtheta, dv])
+    x_dot = v * np.cos(theta)
+    y_dot = v * np.sin(theta)
+    z_dot = [0]
+    theta_dot = (v / L) * delta
+    v_dot = a
+    return np.array([x_dot, y_dot, z_dot, theta_dot, v_dot])
 
 
 
@@ -112,6 +114,9 @@ def f_np(x, u):
 # MPC CALLS
 # =========================================================================
 
-dmpc_distributed(M, d_min, dt, N, nx, nu, u_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")
-dmpc_decentralized(M, d_min, dt, N, nx, nu, u_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-dmpc_decentralized(M, d_min, dt, N, nx, nu, u_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
+dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
+dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
+dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")
+dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
+dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
+dmpc_distributed_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "bicycle")
