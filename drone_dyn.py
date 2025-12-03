@@ -1,9 +1,9 @@
 import casadi as ca
 import numpy as np
-from src.distributed_mpc import dmpc_distributed
-from src.decentralized_mpc import dmpc_decentralized
-from src.decentralized_mpc_client import dmpc_decentralized_client
-from src.distributed_mpc_client import dmpc_distributed_client
+from distributed_mpc import dmpc_distributed
+from decentralized_mpc import dmpc_decentralized
+from decentralized_mpc_client import dmpc_decentralized_client
+from distributed_mpc_client import dmpc_distributed_client
 
 # =========================================================================
 # HELPERS
@@ -72,6 +72,7 @@ d_min = 0.01
 # discretization
 N = 40
 dt = 0.05
+T = 50
 
 # state and input dimensions
 nx = 12  
@@ -338,9 +339,9 @@ def f_np(x, u):
 # MPC CALLS
 # =========================================================================
 
-dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
-dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
-dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "drone")
-dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
-dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
-dmpc_distributed_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "drone")
+dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
+dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
+dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "drone")
+dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
+dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
+dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "drone")

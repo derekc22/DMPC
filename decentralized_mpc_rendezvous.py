@@ -2,11 +2,12 @@ import numpy as np
 import casadi as ca
 from plot import *
 
-def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_client, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
     
     assert mode in ("gauss-seidel", "jacobi"), f"Invalid mode: {mode}"
 
     t_max = T * dt
+    shift = -1
 
     # disturbances, per agent
     w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
@@ -23,8 +24,7 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
         xf = opti.parameter(nx, 1)
 
         # set final state
-        if m == 0:
-            opti.set_value(xf, xf_val_t.reshape((nx, 1)))
+        opti.set_value(xf, xf_val_t.reshape((nx, 1)))
         
         # control bounds and initial condition constraint
         opti.subject_to(X[:, 0] == x0)
@@ -73,9 +73,8 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
         return {"opti": opti, "X": X, "U": U, "x0": x0, "xf": xf, "XYZ_others": XYZ_others, "J" : J}
 
     # build agents and set goals
-    x0_val_client = x0_val[0, :] # store client's current state
-    agents = [build_agent_opti(m, x0_val_client) for m in range(1, M)]
-    agents.insert(0, build_agent_opti(0, xf_val_client))
+    x0_shifted = np.roll(x0_val, shift=shift, axis=0)  # shift rows
+    agents = [build_agent_opti(m, x0_shifted[m]) for m in range(M)]
     
     # helpers
     def shift_pred(X):
@@ -89,9 +88,10 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
             agents[m]["opti"].set_value(agents[m]["XYZ_others"][i], pred_X[j][0:3, :])
             i += 1
             
-    def set_xf_others(xt_val_client):
-        for m in range(1, M):
-            agents[m]["opti"].set_value(agents[m]["xf"], xt_val_client)
+    def set_xf_others(xt_val_others):
+        xt_val = np.roll(xt_val_others, shift=shift, axis=0)  # shift rows
+        for m in range(M):
+            agents[m]["opti"].set_value(agents[m]["xf"], xt_val[m])
 
     # logs for plotting
     x_cl = np.zeros((M, nx, T + 1), dtype=float)
@@ -101,8 +101,8 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
 
     Xk = x0_val.copy()
     
-    # store current position of client
-    xt_val_client = x0_val_client
+    # store current position of others
+    xt_val_others = x0_val
 
     # receding-horizon loop
     for k in range(T):
@@ -111,7 +111,7 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
             for m in range(M):
                 set_xt_others(m)
 
-        set_xf_others(xt_val_client)
+        set_xf_others(xt_val_others)
 
         for m in range(M):
             
@@ -149,12 +149,11 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
             
             J_cl[m, k] = sol.value(J)
             
-            if m == 0:
-                xt_val_client = Xk[0]
+            xt_val_others = Xk
 
             
     # plot
     J_cl_avg = np.mean(J_cl)
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_decentralized_client", mode)
-    plot_xyz(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_decentralized_client", mode)
-    animate_xyz_gif(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_decentralized_client", mode)
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_decentralized_rendezvous", mode)
+    plot_xyz(M, x_cl, x0_val, None, J_cl_avg, obs, f"{dyn}_decentralized_rendezvous", mode)
+    animate_xyz_gif(M, x_cl, x0_val, None, J_cl_avg, obs, f"{dyn}_decentralized_rendezvous", mode)

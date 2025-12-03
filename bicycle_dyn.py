@@ -1,9 +1,9 @@
 import casadi as ca    
 import numpy as np
-from src.distributed_mpc import dmpc_distributed
-from src.decentralized_mpc import dmpc_decentralized
-from src.decentralized_mpc_client import dmpc_decentralized_client
-from src.distributed_mpc_client import dmpc_distributed_client
+from distributed_mpc import dmpc_distributed
+from decentralized_mpc import dmpc_decentralized
+from decentralized_mpc_client import dmpc_decentralized_client
+from distributed_mpc_client import dmpc_distributed_client
 
 # =========================================================================
 # SETUP
@@ -18,6 +18,7 @@ d_min = 0.01
 # discretization
 dt = 0.5
 N = 40
+T = 50
 
 # state and input dimensions
 nx = 5
@@ -114,9 +115,9 @@ def f_np(x, u):
 # MPC CALLS
 # =========================================================================
 
-dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
-dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")
-dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-dmpc_decentralized_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
-dmpc_distributed_client(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "bicycle")
+dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
+dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
+dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")
+dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
+dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
+dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "bicycle")

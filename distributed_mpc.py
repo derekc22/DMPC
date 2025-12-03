@@ -2,12 +2,12 @@ import numpy as np
 import casadi as ca
 from plot import *
 
-def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
+def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
 
-    t_max = N * dt
+    t_max = T * dt
 
     # disturbances, per agent
-    w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), N) for _ in range(M)]
+    w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
 
     pred_X = np.zeros((M * nx, N + 1))
     pred_U = np.zeros((M * nu, N))
@@ -83,15 +83,15 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
         return np.hstack([X[:, 1:], X[:, -1:]])
 
     # logs for plotting
-    x_cl = np.zeros((M, nx, N + 1), dtype=float)
+    x_cl = np.zeros((M, nx, T + 1), dtype=float)
     x_cl[:, :, 0] = x0_val.copy()
-    u_cl = np.zeros((M, nu, N), dtype=float)
-    J_cl = np.zeros((N))
+    u_cl = np.zeros((M, nu, T), dtype=float)
+    J_cl = np.zeros((T))
 
     Xk = x0_val.copy()
 
     # receding-horizon loop
-    for k in range(N):
+    for k in range(T):
 
         # set initial-state parameters
         opti = planner["opti"]
@@ -128,6 +128,6 @@ def dmpc_distributed(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, si
             
     # plot
     J_cl_avg = np.mean(J_cl)/M
-    plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, f"{dyn}_distributed")
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_distributed")
     plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_distributed")
     animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_distributed")

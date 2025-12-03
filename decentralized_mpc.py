@@ -2,14 +2,14 @@ import numpy as np
 import casadi as ca
 from plot import *
 
-def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+def dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
     
     assert mode in ("gauss-seidel", "jacobi"), f"Invalid mode: {mode}"
 
-    t_max = N * dt
+    t_max = T * dt
 
     # disturbances, per agent
-    w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), N) for _ in range(M)]
+    w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
 
     pred_X = np.zeros((M, nx, N + 1))
     pred_U = np.zeros((M, nu, N))
@@ -78,7 +78,7 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
     def shift_pred(X):
         return np.hstack([X[:, 1:], X[:, -1:]])
 
-    def set_XYZ_others(m):
+    def set_xt_others(m):
         i = 0
         for j in range(M):
             if j == m:
@@ -87,24 +87,24 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
             i += 1
 
     # logs for plotting
-    x_cl = np.zeros((M, nx, N + 1), dtype=float)
+    x_cl = np.zeros((M, nx, T + 1), dtype=float)
     x_cl[:, :, 0] = x0_val.copy()
-    u_cl = np.zeros((M, nu, N), dtype=float)
-    J_cl = np.zeros((M, N))
+    u_cl = np.zeros((M, nu, T), dtype=float)
+    J_cl = np.zeros((M, T))
 
     Xk = x0_val.copy()
 
     # receding-horizon loop
-    for k in range(N):
+    for k in range(T):
 
         if mode == "jacobi":
             for m in range(M):
-                set_XYZ_others(m)
+                set_xt_others(m)
 
         for m in range(M):
             
             if mode == "gauss-seidel":
-                set_XYZ_others(m)
+                set_xt_others(m)
             
             # set initial-state parameters
             opti = agents[m]["opti"]
@@ -140,6 +140,6 @@ def dmpc_decentralized(M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 
             
     # plot
     J_cl_avg = np.mean(J_cl)
-    plot_t(t_max, N, M, x_cl, u_cl, J_cl_avg, f"{dyn}_decentralized", mode)
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_decentralized", mode)
     plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_decentralized", mode)
-    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_decentralized")
+    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_decentralized", mode)

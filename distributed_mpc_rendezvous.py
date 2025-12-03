@@ -2,9 +2,10 @@ import numpy as np
 import casadi as ca
 from plot import *
 
-def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_client, f, f_np, sigma, obs, Q, R, H, term, dyn):
+def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
 
     t_max = T * dt
+    shift = -1
 
     # disturbances, per agent
     w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
@@ -21,9 +22,9 @@ def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_cl
         xf = opti.parameter(M * nx, 1)
 
         # set final states
-        x0_val_client = x0_val[0].reshape(nx, 1)
-        xf_val = np.vstack([ xf_val_client.reshape(nx, 1), np.tile(x0_val_client, (M-1, 1)) ])
-        opti.set_value(xf, xf_val)
+        x0_shifted = np.roll(x0_val, shift=shift, axis=0)  # shift rows
+        xf_val = x0_shifted
+        opti.set_value(xf, xf_val.reshape((M * nx, 1)))
         
         # control bounds and initial condition constraint
         opti.subject_to(X[:, 0] == x0)
@@ -64,15 +65,11 @@ def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_cl
             J += ca.mtimes([(xN - xfN).T, H, (xN - xfN)])
             if term:
                 opti.subject_to(xN == xf) # terminal constraint, xf
-
-        # push initial interpolated predictions for warm-starting
-        x0_client = x0_val_client
-        xf_client = xf_val_client.reshape(nx, 1)
-        pred_X[nx * 0 : nx * (0 + 1), :] = np.hstack([x0_client + (k / float(N)) * (xf_client - x0_client) for k in range(N + 1)])
         
-        for m in range(1, M):
+        # push initial interpolated predictions for warm-starting
+        for m in range(M):
             x0_m = x0_val[m, :].reshape(nx, 1)
-            xf_m = x0_val_client
+            xf_m = xf_val[m, :].reshape(nx, 1)
             pred_X[nx * m : nx * (m + 1), :] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
         
         opti.minimize(J)
@@ -88,9 +85,9 @@ def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_cl
     def shift_pred(X):
         return np.hstack([X[:, 1:], X[:, -1:]])
     
-    def set_xf_others(xt_val_client):
-        xt_val = np.vstack([ xf_val_client.reshape(nx, 1), np.tile(xt_val_client.reshape(nx, 1), (M-1, 1)) ])
-        planner["opti"].set_value(planner["xf"], xt_val)
+    def set_xf_others(xt_val_others):
+        xt_val = np.roll(xt_val_others, shift=shift, axis=0)  # shift rows
+        planner["opti"].set_value(planner["xf"], xt_val.reshape(M * nx, 1))
 
     # logs for plotting
     x_cl = np.zeros((M, nx, T + 1), dtype=float)
@@ -100,8 +97,8 @@ def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_cl
 
     Xk = x0_val.copy()
     
-    # store current position of client
-    xt_val_client = x0_val[0, :]
+    # store current position of others
+    xt_val_others = x0_val
 
     # receding-horizon loop
     for k in range(T):
@@ -123,7 +120,7 @@ def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_cl
         pred_X = shift_pred(X_opt)  # update shared predictions
         pred_U = shift_pred(U_opt)  # update shared predictions
 
-        set_xf_others(xt_val_client)
+        set_xf_others(xt_val_others)
 
         for m in range(M):
             uk = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
@@ -137,14 +134,13 @@ def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_cl
             
             Xk[m] = xk_1.flatten()
             
-            if m == 0:
-                xt_val_client = Xk[0]
+            xt_val_others = Xk
             
         J_cl[k] = sol.value(J)
 
             
     # plot
     J_cl_avg = np.mean(J_cl)/M
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_distributed_client")
-    plot_xyz(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_distributed_client")
-    animate_xyz_gif(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_distributed_client")
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_distributed_rendezvous")
+    plot_xyz(M, x_cl, x0_val, None, J_cl_avg, obs, f"{dyn}_distributed_rendezvous")
+    animate_xyz_gif(M, x_cl, x0_val, None, J_cl_avg, obs, f"{dyn}_distributed_rendezvous")
