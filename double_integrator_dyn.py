@@ -61,9 +61,9 @@ torque_max = 50
 
 # number of obstacles
 n_obs = 5
-x_obs = np.hstack([np.random.uniform(-10, 10, (n_obs, 2)), 5*np.ones((n_obs, 1))])
+p_obs = np.hstack([np.random.uniform(-10, 10, (n_obs, 2)), 5*np.ones((n_obs, 1))])
 r_obs = np.random.uniform(1, 5, (n_obs, 1))
-obs = np.hstack([x_obs, r_obs])
+obs = np.hstack([p_obs, r_obs])
 
 # cost matrices
 Q = 10*ca.DM(np.eye(nx))
