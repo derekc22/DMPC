@@ -1,24 +1,24 @@
 import casadi as ca    
 import numpy as np
-from distributed_mpc import dmpc_distributed
-from decentralized_mpc import dmpc_decentralized
-from decentralized_mpc_client import dmpc_decentralized_client
-from distributed_mpc_client import dmpc_distributed_client
-from distributed_mpc_rendezvous import dmpc_distributed_rendezvous
-from decentralized_mpc_rendezvous import dmpc_decentralized_rendezvous
+from src.distributed_mpc import dmpc_distributed
+from src.decentralized_mpc import dmpc_decentralized
+from src.decentralized_mpc_client import dmpc_decentralized_client
+from src.distributed_mpc_client import dmpc_distributed_client
+from src.distributed_mpc_rendezvous import dmpc_distributed_rendezvous
+from src.decentralized_mpc_rendezvous import dmpc_decentralized_rendezvous
 
 # =========================================================================
 # SETUP
 # =========================================================================
 
 # number of agents
-M = 5
+M = 3
 
 # minimum separation distance
-d_min = 0
+d_min = 0.1
 
 # discretization
-dt = 0.5
+dt = 0.1
 N = 25
 T = 100
 
@@ -26,23 +26,12 @@ T = 100
 nx = 12
 nu = 6
 
-# states
-# ???
-
-# inputs
-# ???
-
 # inertial
 mass = 50
 I = np.diag([10, 10, 10])
 
 # initial conditions
 p0 = np.random.randint(-50, 50, (M, 3))
-# p0 = np.array([
-#     [0, 50, 80],
-#     [100, 20, 100],
-#     [30, 20, 40],
-# ])
 theta0 = np.zeros((M, 3))
 v0 = np.zeros((M, 3))
 theta_dot0 = np.zeros((M, 3))
@@ -60,7 +49,7 @@ torque_min = -50
 torque_max = 50
 
 # number of obstacles
-n_obs = 5
+n_obs = 0
 p_obs = np.hstack([np.random.uniform(-10, 10, (n_obs, 2)), 5*np.ones((n_obs, 1))])
 r_obs = np.random.uniform(1, 5, (n_obs, 1))
 obs = np.hstack([p_obs, r_obs])
@@ -152,9 +141,11 @@ def f_np(x, u):
 # dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "double_integrator")
 # dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "double_integrator")
 # dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "double_integrator")
-# dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "double_integrator")
+
+dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "double_integrator")
 # dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "double_integrator")
-# dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "double_integrator")
+dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "double_integrator")
+
 dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "double_integrator")
-dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "double_integrator")
+# dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "double_integrator")
 dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "double_integrator")

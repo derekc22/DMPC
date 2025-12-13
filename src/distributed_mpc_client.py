@@ -1,10 +1,16 @@
 import numpy as np
 import casadi as ca
-from plot import *
+from utils.plot import *
 
 def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_client, f, f_np, sigma, obs, Q, R, H, term, dyn):
 
-    t_max = T * dt
+    # helpers
+    def shift_pred(X):
+        return np.hstack([X[:, 1:], X[:, -1:]])
+    
+    def set_xf_others(xt_val_client):
+        xt_val = np.vstack([ xf_val_client.reshape(nx, 1), np.tile(xt_val_client.reshape(nx, 1), (M-1, 1)) ])
+        planner["opti"].set_value(planner["xf"], xt_val)
 
     # disturbances, per agent
     w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
@@ -84,14 +90,6 @@ def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_cl
 
     planner = build_central_opti()
     
-    # helpers
-    def shift_pred(X):
-        return np.hstack([X[:, 1:], X[:, -1:]])
-    
-    def set_xf_others(xt_val_client):
-        xt_val = np.vstack([ xf_val_client.reshape(nx, 1), np.tile(xt_val_client.reshape(nx, 1), (M-1, 1)) ])
-        planner["opti"].set_value(planner["xf"], xt_val)
-
     # logs for plotting
     x_cl = np.zeros((M, nx, T + 1), dtype=float)
     x_cl[:, :, 0] = x0_val.copy()
@@ -144,7 +142,8 @@ def dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_cl
 
             
     # plot
+    t_max = T * dt
     J_cl_avg = np.mean(J_cl)/M
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_distributed_client")
-    plot_xyz(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_distributed_client")
-    animate_xyz_gif(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, f"{dyn}_distributed_client")
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "distributed_client")
+    plot_xyz(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, dyn, "distributed_client")
+    animate_xyz_gif(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, dyn, "distributed_client")

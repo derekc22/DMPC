@@ -1,10 +1,18 @@
 import numpy as np
 import casadi as ca
-from plot import *
+from utils.plot import *
 
-def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
+def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
 
-    t_max = T * dt
+    # helpers
+    def shift_pred(X):
+        return np.hstack([X[:, 1:], X[:, -1:]])
+
+    def set_xf_others(xt_val_others):
+        xt_val = np.roll(xt_val_others, shift=shift, axis=0)  # shift rows
+        planner["opti"].set_value(planner["xf"], xt_val.reshape(M * nx, 1))
+    
+    shift = -1
 
     # disturbances, per agent
     w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
@@ -21,6 +29,8 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
         xf = opti.parameter(M * nx, 1)
 
         # set final states
+        x0_shifted = np.roll(x0_val, shift=shift, axis=0)  # shift rows
+        xf_val = x0_shifted
         opti.set_value(xf, xf_val.reshape((M * nx, 1)))
         
         # control bounds and initial condition constraint
@@ -62,7 +72,7 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
             J += ca.mtimes([(xN - xfN).T, H, (xN - xfN)])
             if term:
                 opti.subject_to(xN == xf) # terminal constraint, xf
-
+        
         # push initial interpolated predictions for warm-starting
         for m in range(M):
             x0_m = x0_val[m, :].reshape(nx, 1)
@@ -78,10 +88,6 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
 
     planner = build_central_opti()
     
-    # helpers
-    def shift_pred(X):
-        return np.hstack([X[:, 1:], X[:, -1:]])
-
     # logs for plotting
     x_cl = np.zeros((M, nx, T + 1), dtype=float)
     x_cl[:, :, 0] = x0_val.copy()
@@ -89,6 +95,9 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
     J_cl = np.zeros((T))
 
     Xk = x0_val.copy()
+    
+    # store current position of others
+    xt_val_others = x0_val
 
     # receding-horizon loop
     for k in range(T):
@@ -110,7 +119,8 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
         pred_X = shift_pred(X_opt)  # update shared predictions
         pred_U = shift_pred(U_opt)  # update shared predictions
 
-        
+        set_xf_others(xt_val_others)
+
         for m in range(M):
             uk = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
 
@@ -123,11 +133,14 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
             
             Xk[m] = xk_1.flatten()
             
+            xt_val_others = Xk
+            
         J_cl[k] = sol.value(J)
 
             
     # plot
+    t_max = T * dt
     J_cl_avg = np.mean(J_cl)/M
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_distributed")
-    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_distributed")
-    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, f"{dyn}_distributed")
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "distributed_rendezvous")
+    plot_xyz(M, x_cl, x0_val, None, J_cl_avg, obs, dyn, "distributed_rendezvous")
+    animate_xyz_gif(M, x_cl, x0_val, None, J_cl_avg, obs, dyn, "distributed_rendezvous")

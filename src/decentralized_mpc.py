@@ -1,13 +1,22 @@
 import numpy as np
 import casadi as ca
-from plot import *
+from utils.plot import *
 
-def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+def dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+
+    # helpers
+    def shift_pred(X):
+        return np.hstack([X[:, 1:], X[:, -1:]])
+
+    def set_xt_others(m):
+        i = 0
+        for j in range(M):
+            if j == m:
+                continue
+            agents[m]["opti"].set_value(agents[m]["XYZ_others"][i], pred_X[j][0:3, :])
+            i += 1
     
     assert mode in ("gauss-seidel", "jacobi"), f"Invalid mode: {mode}"
-
-    t_max = T * dt
-    shift = -1
 
     # disturbances, per agent
     w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
@@ -16,7 +25,7 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
     pred_U = np.zeros((M, nu, N))
 
     # build a local OCP for one agent, with other agents' XYZ as parameters
-    def build_agent_opti(m, xf_val_t):
+    def build_agent_opti(m):
         opti = ca.Opti()
         X = opti.variable(nx, N + 1)
         U = opti.variable(nu, N)
@@ -24,7 +33,7 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
         xf = opti.parameter(nx, 1)
 
         # set final state
-        opti.set_value(xf, xf_val_t.reshape((nx, 1)))
+        opti.set_value(xf, xf_val[m, :].reshape((nx, 1)))
         
         # control bounds and initial condition constraint
         opti.subject_to(X[:, 0] == x0)
@@ -62,7 +71,7 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
 
         # push initial interpolated predictions for warm-starting
         x0_m = x0_val[m, :].reshape(nx, 1)
-        xf_m = xf_val_t.reshape(nx, 1)
+        xf_m = xf_val[m, :].reshape(nx, 1)
         pred_X[m] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
 
         opti.minimize(J)
@@ -73,25 +82,7 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
         return {"opti": opti, "X": X, "U": U, "x0": x0, "xf": xf, "XYZ_others": XYZ_others, "J" : J}
 
     # build agents and set goals
-    x0_shifted = np.roll(x0_val, shift=shift, axis=0)  # shift rows
-    agents = [build_agent_opti(m, x0_shifted[m]) for m in range(M)]
-    
-    # helpers
-    def shift_pred(X):
-        return np.hstack([X[:, 1:], X[:, -1:]])
-
-    def set_xt_others(m):
-        i = 0
-        for j in range(M):
-            if j == m:
-                continue
-            agents[m]["opti"].set_value(agents[m]["XYZ_others"][i], pred_X[j][0:3, :])
-            i += 1
-            
-    def set_xf_others(xt_val_others):
-        xt_val = np.roll(xt_val_others, shift=shift, axis=0)  # shift rows
-        for m in range(M):
-            agents[m]["opti"].set_value(agents[m]["xf"], xt_val[m])
+    agents = [build_agent_opti(m) for m in range(M)]
 
     # logs for plotting
     x_cl = np.zeros((M, nx, T + 1), dtype=float)
@@ -100,9 +91,6 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
     J_cl = np.zeros((M, T))
 
     Xk = x0_val.copy()
-    
-    # store current position of others
-    xt_val_others = x0_val
 
     # receding-horizon loop
     for k in range(T):
@@ -111,13 +99,11 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
             for m in range(M):
                 set_xt_others(m)
 
-        set_xf_others(xt_val_others)
-
         for m in range(M):
             
             if mode == "gauss-seidel":
                 set_xt_others(m)
-                
+            
             # set initial-state parameters
             opti = agents[m]["opti"]
             X = agents[m]["X"]
@@ -148,12 +134,11 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
             Xk[m] = xk_1.flatten()
             
             J_cl[m, k] = sol.value(J)
-            
-            xt_val_others = Xk
 
             
     # plot
+    t_max = T * dt
     J_cl_avg = np.mean(J_cl)
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, f"{dyn}_decentralized_rendezvous", mode)
-    plot_xyz(M, x_cl, x0_val, None, J_cl_avg, obs, f"{dyn}_decentralized_rendezvous", mode)
-    animate_xyz_gif(M, x_cl, x0_val, None, J_cl_avg, obs, f"{dyn}_decentralized_rendezvous", mode)
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "decentralized", mode)
+    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "decentralized", mode)
+    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "decentralized", mode)

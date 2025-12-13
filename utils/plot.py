@@ -4,9 +4,9 @@ import math
 import os
 import imageio
 
-def plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, fname, qualifier=""):
+def plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, fname, qualifier=""):
 
-    os.makedirs("figures", exist_ok=True)
+    os.makedirs(f"figures/{dyn}/plots", exist_ok=True)
 
     # internal layout parameters
     max_width = 3          # maximum number of subplots per row
@@ -44,7 +44,7 @@ def plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, fname, qualifier=""):
 
     plt.suptitle(f'{fname} mpc x_cl, Jbar = {J_cl_avg:.3f}')
     plt.tight_layout()
-    plt.savefig(f"figures/{fname}_mpc{('_' + qualifier) if qualifier else ''}_x_cl.png")
+    plt.savefig(f"figures/{dyn}/plots/{fname}{('_' + qualifier) if qualifier else ''}_x_cl.png")
     plt.close()
 
     # ------------------------------------------------------------
@@ -72,7 +72,7 @@ def plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, fname, qualifier=""):
 
     plt.suptitle(f'{fname} mpc u_cl, Jbar = {J_cl_avg:.3f}')
     plt.tight_layout()
-    plt.savefig(f"figures/{fname}_mpc{('_' + qualifier) if qualifier else ''}_u_cl.png")
+    plt.savefig(f"figures/{dyn}/plots/{fname}{('_' + qualifier) if qualifier else ''}_u_cl.png")
     plt.close()
 
 
@@ -80,9 +80,9 @@ def plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, fname, qualifier=""):
 
 
 
-def plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier=""):
+def plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, fname, qualifier=""):
 
-    os.makedirs("figures", exist_ok=True)
+    os.makedirs(f"figures/{dyn}/plots", exist_ok=True)
 
     fig = plt.figure(figsize=(9, 8))
     ax = fig.add_subplot(111, projection='3d')
@@ -144,7 +144,7 @@ def plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier=""):
 
     plt.title(f'{fname} mpc, Jbar = {J_cl_avg:.3f}')
     plt.tight_layout()
-    plt.savefig(f"figures/{fname}_mpc{('_' + qualifier) if qualifier else ''}_xyz.png")
+    plt.savefig(f"figures/{dyn}/plots/{fname}{('_' + qualifier) if qualifier else ''}_xyz.png")
     plt.close()
 
 
@@ -152,9 +152,9 @@ def plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier=""):
 
 
 
-def animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier="", fps=10):
+def animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, fname, qualifier="", fps=10):
 
-    os.makedirs("figures/gifs", exist_ok=True)
+    os.makedirs(f"figures/{dyn}/gifs", exist_ok=True)
 
     frames = []
     T = x_cl.shape[2]
@@ -231,6 +231,6 @@ def animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, fname, qualifier="",
         plt.close(fig)
         os.remove(frame_path)
 
-    gif_path = f"figures/gifs/{fname}_mpc{('_' + qualifier) if qualifier else ''}_xyz.gif"
+    gif_path = f"figures/{dyn}/gifs/{fname}{('_' + qualifier) if qualifier else ''}_xyz.gif"
     imageio.mimsave(gif_path, frames, fps=fps, loop=0)
     
