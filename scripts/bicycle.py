@@ -2,8 +2,8 @@ import casadi as ca
 import numpy as np
 from src.distributed_mpc import dmpc_distributed
 from src.decentralized_mpc import dmpc_decentralized
-from src.decentralized_mpc_client import dmpc_decentralized_client
-from src.distributed_mpc_client import dmpc_distributed_client
+from src.decentralized_mpc_leader import dmpc_decentralized_leader
+from src.distributed_mpc_leader import dmpc_distributed_leader
 from src.distributed_mpc_rendezvous import dmpc_distributed_rendezvous
 from src.decentralized_mpc_rendezvous import dmpc_decentralized_rendezvous
 
@@ -12,13 +12,13 @@ from src.decentralized_mpc_rendezvous import dmpc_decentralized_rendezvous
 # =========================================================================
 
 # number of agents
-M = 3
+M = 2
 
 # minimum separation distance
 d_min = 0.1
 
 # discretization
-dt = 0.1
+dt = 0.5
 N = 25
 T = 100
 
@@ -45,7 +45,7 @@ theta0 = np.zeros((M, 1))
 v0 = np.zeros((M, 1))
 
 # final conditions
-pf = np.hstack([np.random.uniform(10, 11, (M, 2)), np.zeros((M, 1))])
+pf = np.hstack([np.random.uniform(-10, 10, (M, 2)), np.zeros((M, 1))])
 thetaf = np.zeros((M, 1))
 vf = np.zeros((M, 1))
 
@@ -117,14 +117,14 @@ def f_np(x, u):
 # MPC CALLS
 # =========================================================================
 
-# dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-# dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
-# dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")
-
-dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-# dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
-dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "bicycle")
-
 dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-# dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
+dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
 dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")
+
+dmpc_decentralized_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
+dmpc_decentralized_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
+dmpc_distributed_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "bicycle")
+
+dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
+dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
+dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")

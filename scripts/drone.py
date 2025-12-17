@@ -2,8 +2,8 @@ import casadi as ca
 import numpy as np
 from src.distributed_mpc import dmpc_distributed
 from src.decentralized_mpc import dmpc_decentralized
-from src.decentralized_mpc_client import dmpc_decentralized_client
-from src.distributed_mpc_client import dmpc_distributed_client
+from src.decentralized_mpc_leader import dmpc_decentralized_leader
+from src.distributed_mpc_leader import dmpc_distributed_leader
 from src.distributed_mpc_rendezvous import dmpc_distributed_rendezvous
 from src.decentralized_mpc_rendezvous import dmpc_decentralized_rendezvous
 
@@ -66,15 +66,15 @@ def eul2rotm_zyx(yaw, pitch, roll):
 # =========================================================================
 
 # number of agents
-M = 3
+M = 10
 
 # minimum separation distance
-d_min = 0.1
+d_min = 1.5
 
 # discretization
-dt = 0.01
-N = 100
-T = 1000
+dt = 0.05
+N = 10
+T = 50
 
 # state and input dimensions
 nx = 12  
@@ -100,25 +100,25 @@ Iyyb = 0.01  # [kg m^2]
 Izzb = 0.05  # [kg m^2]
 
 # initial conditions
-p0 = np.hstack([np.random.uniform(-10, 10, (M, 2)), np.random.uniform(0, 10, (M, 1))]) # [m]
+p0 = np.hstack([np.random.uniform(-50, 50, (M, 2)), np.random.uniform(0, 50, (M, 1))]) # [m]
 euler0 = np.zeros((M, 3))  # [rad]
 v0 = np.zeros((M, 3))      # [m/s]
 wb0 = np.zeros((M, 3))     # [rad/s]
 
 # final conditions
-pf = np.hstack([np.random.uniform(-10, 10, (M, 2)), np.random.uniform(0, 10, (M, 1))])
+pf = np.hstack([np.random.uniform(-50, 50, (M, 2)), np.random.uniform(0, 50, (M, 1))])
 vf = np.zeros((M, 3))       # [rad]
 eulerf = np.zeros((M, 3))   # [m/s]
 wbf = np.zeros((M, 3))      # [rad/s]
 
-# input bounds [F1, F2, F3, F4]
-F_min = 0      # [N]
-F_max = 20.0   # [N]
+# input bounds [f1, f2, f3, f4]
+f_min = 0      # [N]
+f_max = 20.0   # [N]
 
 # number of obstacles
-n_obs = 0
-p_obs = np.hstack([np.random.uniform(-10, 10, (n_obs, 2)), 10*np.ones((n_obs, 1))])
-r_obs = np.random.uniform(1, 5, (n_obs, 1))
+n_obs = 3
+p_obs = np.hstack([np.random.uniform(-50, 50, (n_obs, 2)), np.random.uniform(0, 50, (n_obs, 1))])
+r_obs = np.random.uniform(1, 10, (n_obs, 1))
 obs = np.hstack([p_obs, r_obs])
 
 # cost matrices
@@ -126,7 +126,7 @@ Q = ca.DM([
     50, 50, 50,         # position
     1e-3, 1e-3, 1e-3,   # euler angles
     1, 1, 1,            # linear velocity
-    0.1, 0.1, 0.1       # angular velocity
+    1e-3, 1e-3, 1e-3       # angular velocity
 ])
 Q = ca.diag(Q)
 R = ca.DM(np.eye(nu))
@@ -143,7 +143,7 @@ H = 10.0 * Q
 x0_val = np.hstack([p0, euler0, v0, wb0])
 xf_val = np.hstack([pf, eulerf, vf, wbf])
 
-U_lim = [(F_min, F_max), (F_min, F_max), (F_min, F_max), (F_min, F_max)]
+U_lim = [(f_min, f_max), (f_min, f_max), (f_min, f_max), (f_min, f_max)]
 
 # inertia matrices
 Ib_np = np.diag([Ixxb, Iyyb, Izzb])
@@ -341,14 +341,14 @@ def f_np(x, u):
 # MPC CALLS
 # =========================================================================
 
-# dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
-# dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
-# dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "drone")
-
-dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
-# dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
-dmpc_distributed_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "drone")
-
 dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
-# dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
+dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
 dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "drone")
+
+dmpc_decentralized_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
+dmpc_decentralized_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
+dmpc_distributed_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "drone")
+
+dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "drone")
+dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "drone")
+dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "drone")

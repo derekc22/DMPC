@@ -2,7 +2,9 @@ import numpy as np
 import casadi as ca
 from utils.plot import *
 
-def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_client, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+def dmpc_decentralized_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_leader, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+    
+    wall_clk = np.zeros((M, T))
 
     # helpers
     def shift_pred(X):
@@ -15,7 +17,7 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
         dist = ca.sqrt(dist_sq)  # smooth sqrt of non-zero value
         return x_other - radius * diff / dist
 
-    def set_xt_others(m):
+    def set_xyz_others(m):
         i = 0
         for j in range(M):
             if j == m:
@@ -23,9 +25,9 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
             agents[m]["opti"].set_value(agents[m]["XYZ_others"][i], pred_X[j][0:3, :])
             i += 1
             
-    def set_xf_others(xt_val_client):
+    def set_xf(xt_val_leader):
         for m in range(1, M):
-            agents[m]["opti"].set_value(agents[m]["xf"], xt_val_client)
+            agents[m]["opti"].set_value(agents[m]["xf"], xt_val_leader)
     
     assert mode in ("gauss-seidel", "jacobi"), f"Invalid mode: {mode}"
 
@@ -70,7 +72,7 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
                 # leader targets exact goal position
                 J += ca.mtimes([(xk - xf).T, Q, (xk - xf)]) + ca.mtimes([uk.T, R, uk])
             else:
-                # clients target sphere surface around leader
+                # followers target sphere surface around leader
                 xk_target = ca.vertcat(sphere_target(xk[0:3], xf[0:3], d_min), xf[3:])
                 J += ca.mtimes([(xk - xk_target).T, Q, (xk - xk_target)]) + ca.mtimes([uk.T, R, uk])
 
@@ -90,12 +92,13 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
             if term:
                 opti.subject_to(xN == xf) # terminal constraint, xf
         else:
-            # clients target sphere surface around leader
+            # followers target sphere surface around leader
             xN_target = ca.vertcat(sphere_target(xN[0:3], xf[0:3], d_min), xf[3:])
             J += ca.mtimes([(xN - xN_target).T, H, (xN - xN_target)])
             if term:
-                # be at distance d_min from leader
-                opti.subject_to(ca.sumsqr(xN[0:3] - xf[0:3]) == d_min ** 2) # terminal constraint
+                # terminal constraint
+                opti.subject_to(ca.sumsqr(xN[0:3] - xf[0:3]) == d_min ** 2) # be at distance d_min from leader
+                opti.subject_to(xN[3:] == xf[3:])
 
         # push initial interpolated predictions for warm-starting
         x0_m = x0_val[m, :].reshape(nx, 1)
@@ -110,9 +113,9 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
         return {"opti": opti, "X": X, "U": U, "x0": x0, "xf": xf, "XYZ_others": XYZ_others, "J" : J}
 
     # build agents and set goals
-    x0_val_client = x0_val[0, :] # store client's current state
-    agents = [build_agent_opti(m, x0_val_client) for m in range(1, M)]
-    agents.insert(0, build_agent_opti(0, xf_val_client))
+    x0_val_leader = x0_val[0, :] # store leader's current state
+    agents = [build_agent_opti(m, x0_val_leader) for m in range(1, M)]
+    agents.insert(0, build_agent_opti(0, xf_val_leader))
     
     # logs for plotting
     x_cl = np.zeros((M, nx, T + 1), dtype=float)
@@ -120,24 +123,24 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
     u_cl = np.zeros((M, nu, T), dtype=float)
     J_cl = np.zeros((M, T))
 
-    Xk = x0_val.copy()
+    Xt = x0_val.copy()
     
-    # store current position of client
-    xt_val_client = x0_val_client
+    # store current position of leader
+    xt_val_leader = x0_val_leader
 
-    # receding-horizon loop
-    for k in range(T):
+    # simulation loop
+    for t in range(T):
+        
+        set_xf(xt_val_leader)
 
         if mode == "jacobi":
             for m in range(M):
-                set_xt_others(m)
-
-        set_xf_others(xt_val_client)
+                set_xyz_others(m)
 
         for m in range(M):
             
             if mode == "gauss-seidel":
-                set_xt_others(m)
+                set_xyz_others(m)
                 
             # set initial-state parameters
             opti = agents[m]["opti"]
@@ -145,8 +148,8 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
             U = agents[m]["U"]
             J = agents[m]["J"]
             
-            xk = Xk[m].reshape(nx, 1)
-            opti.set_value(agents[m]["x0"], xk)
+            xt = Xt[m].reshape(nx, 1)
+            opti.set_value(agents[m]["x0"], xt)
             opti.set_initial(X, pred_X[m]) # warm start
             opti.set_initial(U, pred_U[m]) # warm start
             
@@ -158,25 +161,29 @@ def dmpc_decentralized_client(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val_
             pred_U[m] = shift_pred(U_opt)  # update shared predictions
 
 
-            uk = U_opt[:, 0].reshape((nu, 1))
+            ut = U_opt[:, 0].reshape((nu, 1))
 
             # apply first control, advance true states, shift warm starts, log
-            xk_1 = xk + dt * f_np(xk, uk) #+ w[m][k, :].reshape(nx, 1)
+            xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
 
-            x_cl[m, :, k + 1] = xk_1.flatten()
-            u_cl[m, :, k] = uk.flatten()
+            x_cl[m, :, t + 1] = xt_1.flatten()
+            u_cl[m, :, t] = ut.flatten()
             
-            Xk[m] = xk_1.flatten()
+            Xt[m] = xt_1.flatten()
             
-            J_cl[m, k] = sol.value(J)
+            J_cl[m, t] = sol.value(J)
             
             if m == 0:
-                xt_val_client = Xk[0]
+                xt_val_leader = Xt[0]
+                
+            wall_clk[m, t] = sol.stats()["t_wall_total"]
 
-            
+
     # plot
     t_max = T * dt
     J_cl_avg = np.mean(J_cl)
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "decentralized_client", mode)
-    plot_xyz(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, dyn, "decentralized_client", mode)
-    animate_xyz_gif(M, x_cl, x0_val, xf_val_client, J_cl_avg, obs, dyn, "decentralized_client", mode)
+    wall_clk_median = np.median(wall_clk)
+
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "decentralized_leader", mode)
+    plot_xyz(M, x_cl, x0_val, xf_val_leader, J_cl_avg, obs, dyn, "decentralized_leader", wall_clk_median, mode)
+    animate_xyz_gif(M, x_cl, x0_val, xf_val_leader, J_cl_avg, obs, dyn, "decentralized_leader", wall_clk_median, mode)

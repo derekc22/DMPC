@@ -3,12 +3,14 @@ import casadi as ca
 from utils.plot import *
 
 def dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+    
+    wall_clk = np.zeros((M, T))
 
     # helpers
     def shift_pred(X):
         return np.hstack([X[:, 1:], X[:, -1:]])
 
-    def set_xt_others(m):
+    def set_xyz_others(m):
         i = 0
         for j in range(M):
             if j == m:
@@ -90,19 +92,19 @@ def dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_n
     u_cl = np.zeros((M, nu, T), dtype=float)
     J_cl = np.zeros((M, T))
 
-    Xk = x0_val.copy()
+    Xt = x0_val.copy()
 
-    # receding-horizon loop
-    for k in range(T):
+    # simulation loop
+    for t in range(T):
 
         if mode == "jacobi":
             for m in range(M):
-                set_xt_others(m)
+                set_xyz_others(m)
 
         for m in range(M):
             
             if mode == "gauss-seidel":
-                set_xt_others(m)
+                set_xyz_others(m)
             
             # set initial-state parameters
             opti = agents[m]["opti"]
@@ -110,8 +112,8 @@ def dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_n
             U = agents[m]["U"]
             J = agents[m]["J"]
             
-            xk = Xk[m].reshape(nx, 1)
-            opti.set_value(agents[m]["x0"], xk)
+            xt = Xt[m].reshape(nx, 1)
+            opti.set_value(agents[m]["x0"], xt)
             opti.set_initial(X, pred_X[m]) # warm start
             opti.set_initial(U, pred_U[m]) # warm start
             
@@ -123,22 +125,26 @@ def dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_n
             pred_U[m] = shift_pred(U_opt)  # update shared predictions
 
 
-            uk = U_opt[:, 0].reshape((nu, 1))
+            ut = U_opt[:, 0].reshape((nu, 1))
 
             # apply first control, advance true states, shift warm starts, log
-            xk_1 = xk + dt * f_np(xk, uk) #+ w[m][k, :].reshape(nx, 1)
+            xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
 
-            x_cl[m, :, k + 1] = xk_1.flatten()
-            u_cl[m, :, k] = uk.flatten()
+            x_cl[m, :, t + 1] = xt_1.flatten()
+            u_cl[m, :, t] = ut.flatten()
             
-            Xk[m] = xk_1.flatten()
+            Xt[m] = xt_1.flatten()
             
-            J_cl[m, k] = sol.value(J)
+            J_cl[m, t] = sol.value(J)
+            
+            wall_clk[m, t] = sol.stats()["t_wall_total"]
 
-            
+
     # plot
     t_max = T * dt
     J_cl_avg = np.mean(J_cl)
+    wall_clk_median = np.median(wall_clk)
+
     plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "decentralized", mode)
-    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "decentralized", mode)
-    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "decentralized", mode)
+    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "decentralized", wall_clk_median, mode)
+    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "decentralized", wall_clk_median, mode)

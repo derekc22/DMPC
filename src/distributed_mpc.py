@@ -4,6 +4,9 @@ from utils.plot import *
 
 def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
 
+    wall_clk = np.zeros((T))
+
+
     # helpers
     def shift_pred(X):
         return np.hstack([X[:, 1:], X[:, -1:]])
@@ -29,13 +32,13 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
         opti.subject_to(X[:, 0] == x0)
         for m in range(M):
             for i in range(nu):
-                opti.subject_to(opti.bounded(U_lim[i][0], U[i, :], U_lim[i][1]))
+                opti.subject_to(opti.bounded(U_lim[i][0], U[nu * m + i, :], U_lim[i][1]))
 
             # obstacle constraint, center (xo,yo,zo), radius ro
             xz = X[nx * m : nx * (m + 1), :]
             for o in obs:
                 xo, yo, zo, ro = o
-                opti.subject_to((xz[0, :] - xo) ** 2 + (xz[1, :] - yo) ** 2 + (xz[2, :] - zo) ** 2 >= ro)
+                opti.subject_to((xz[0, :] - xo) ** 2 + (xz[1, :] - yo) ** 2 + (xz[2, :] - zo) ** 2 >= ro ** 2)
         
         # build objective function
         J = 0
@@ -51,10 +54,10 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
                 x_next = xk + dt * f(xk, uk)
                 opti.subject_to(X[nx * m : nx * (m + 1), k + 1] == x_next)
 
-            # collision avoidance, pairwise
+                # collision avoidance, pairwise
                 for j in range(m + 1, M):
-                    xz = X[nx * m : nx * m + 2, k]
-                    xj = X[nx * j : nx * j + 2, k]
+                    xz = X[nx * m : nx * m + 3, k]
+                    xj = X[nx * j : nx * j + 3, k]
                     opti.subject_to(ca.sumsqr(xz - xj) >= d_min ** 2)
 
         # terminal cost
@@ -62,8 +65,8 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
             xN = X[nx * m:nx * (m + 1), N]
             xfN = xf[nx * m:nx * (m + 1), 0]
             J += ca.mtimes([(xN - xfN).T, H, (xN - xfN)])
-            if term:
-                opti.subject_to(xN == xf) # terminal constraint, xf
+        if term:
+            opti.subject_to(X[:, N] == xf) # terminal constraint, xf
 
         # push initial interpolated predictions for warm-starting
         for m in range(M):
@@ -86,10 +89,10 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
     u_cl = np.zeros((M, nu, T), dtype=float)
     J_cl = np.zeros((T))
 
-    Xk = x0_val.copy()
+    Xt = x0_val.copy()
 
-    # receding-horizon loop
-    for k in range(T):
+    # simulation loop
+    for t in range(T):
 
         # set initial-state parameters
         opti = planner["opti"]
@@ -97,7 +100,7 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
         U = planner["U"]
         J = planner["J"]
 
-        opti.set_value(planner["x0"], Xk.reshape(M * nx, 1))
+        opti.set_value(planner["x0"], Xt.reshape(M * nx, 1))
         opti.set_initial(X, pred_X) # warm start
         opti.set_initial(U, pred_U) # warm start
         
@@ -110,23 +113,27 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
 
         
         for m in range(M):
-            uk = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
+            ut = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
 
             # apply first control, advance true states, shift warm starts, log
-            xk = Xk[m].reshape((nx, 1))
-            xk_1 = xk + dt * f_np(xk, uk) #+ w[m][k, :].reshape(nx, 1)
+            xt = Xt[m].reshape((nx, 1))
+            xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
 
-            x_cl[m, :, k + 1] = xk_1.flatten()
-            u_cl[m, :, k] = uk.flatten()
+            x_cl[m, :, t + 1] = xt_1.flatten()
+            u_cl[m, :, t] = ut.flatten()
             
-            Xk[m] = xk_1.flatten()
+            Xt[m] = xt_1.flatten()
             
-        J_cl[k] = sol.value(J)
+        J_cl[t] = sol.value(J)
+
+        wall_clk[t] = sol.stats()["t_wall_total"]
 
             
     # plot
     t_max = T * dt
     J_cl_avg = np.mean(J_cl)/M
+    wall_clk_median = np.median(wall_clk)
+
     plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "distributed")
-    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "distributed")
-    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "distributed")
+    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "distributed", wall_clk_median)
+    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "distributed", wall_clk_median)
