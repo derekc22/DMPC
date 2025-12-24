@@ -1,16 +1,32 @@
 import numpy as np
 import casadi as ca
+from dataclasses import asdict
 from utils.plot import *
 
-def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
-
-    wall_clk = np.zeros((T))
-
+def distributed_leader(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
+    
+    # parse configs        
+    if mj:
+        dyn, f, f_np, nx, nu, U_lim, mj_model, mj_data = asdict(dyn_cfg).values()
+    else:
+        dyn, f, f_np, nx, nu, U_lim = asdict(dyn_cfg).values()    N, Q, R, H, term = asdict(dmpc_cfg).values()
+    T, dt, M, d_min, x0_val, obs, sigma, xf_val_leader = asdict(env_cfg).values()
 
     # helpers
     def shift_pred(X):
         return np.hstack([X[:, 1:], X[:, -1:]])
     
+    def sphere_target(x_self, x_other, radius):
+        # compute closest point on sphere of radius d_min around x_other to x_self
+        diff = x_other - x_self
+        dist_sq = ca.dot(diff, diff) + 1e-6  # squared distance with epsilon
+        dist = ca.sqrt(dist_sq)  # smooth sqrt of non-zero value
+        return x_other - radius * diff / dist
+    
+    def set_xf(xt_val_leader):
+        xt_val = np.vstack([ xf_val_leader.reshape(nx, 1), np.tile(xt_val_leader.reshape(nx, 1), (M-1, 1)) ])
+        planner["opti"].set_value(planner["xf"], xt_val)
+
     # disturbances, per agent
     w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
 
@@ -26,7 +42,9 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
         xf = opti.parameter(M * nx, 1)
 
         # set final states
-        opti.set_value(xf, xf_val.reshape((M * nx, 1)))
+        x0_val_leader = x0_val[0].reshape(nx, 1)
+        xf_val = np.vstack([ xf_val_leader.reshape(nx, 1), np.tile(x0_val_leader, (M-1, 1)) ])
+        opti.set_value(xf, xf_val)
         
         # control bounds and initial condition constraint
         opti.subject_to(X[:, 0] == x0)
@@ -48,7 +66,13 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
                 uk = U[nu * m : nu * (m + 1), k]
                 xf_m = xf[nx * m : nx * (m + 1)]
 
-                J += ca.mtimes([(xk - xf_m).T, Q, (xk - xf_m)]) + ca.mtimes([uk.T, R, uk])
+                if m == 0:
+                    # leader targets exact goal position
+                    J += ca.mtimes([(xk - xf_m).T, Q, (xk - xf_m)]) + ca.mtimes([uk.T, R, uk])
+                else:
+                    # followers target sphere surface around leader
+                    xk_target = ca.vertcat(sphere_target(xk[0:3], xf_m[0:3], d_min), xf_m[3:])
+                    J += ca.mtimes([(xk - xk_target).T, Q, (xk - xk_target)]) + ca.mtimes([uk.T, R, uk])
 
                 # forward Euler
                 x_next = xk + dt * f(xk, uk)
@@ -64,14 +88,28 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
         for m in range(M):
             xN = X[nx * m:nx * (m + 1), N]
             xfN = xf[nx * m:nx * (m + 1), 0]
-            J += ca.mtimes([(xN - xfN).T, H, (xN - xfN)])
-        if term:
-            opti.subject_to(X[:, N] == xf) # terminal constraint, xf
+            if m == 0:
+                # leader targets exact goal position
+                J += ca.mtimes([(xN - xfN).T, H, (xN - xfN)])
+                if term:
+                    opti.subject_to(xN == xfN) # terminal constraint, xf
+            else:
+                # followers target sphere surface around leader
+                xN_target = ca.vertcat(sphere_target(xN[0:3], xfN[0:3], d_min), xfN[3:])
+                J += ca.mtimes([(xN - xN_target).T, H, (xN - xN_target)])
+                if term:
+                    # terminal constraint
+                    opti.subject_to(ca.sumsqr(xN[0:3] - xfN[0:3]) == d_min ** 2) # be at distance d_min from leader
+                    opti.subject_to(xN[3:] == xfN[3:])
 
         # push initial interpolated predictions for warm-starting
-        for m in range(M):
+        x0_leader = x0_val_leader
+        xf_leader = xf_val_leader.reshape(nx, 1)
+        pred_X[nx * 0 : nx * (0 + 1), :] = np.hstack([x0_leader + (k / float(N)) * (xf_leader - x0_leader) for k in range(N + 1)])
+        
+        for m in range(1, M):
             x0_m = x0_val[m, :].reshape(nx, 1)
-            xf_m = xf_val[m, :].reshape(nx, 1)
+            xf_m = x0_val_leader
             pred_X[nx * m : nx * (m + 1), :] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
         
         opti.minimize(J)
@@ -88,11 +126,18 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
     x_cl[:, :, 0] = x0_val.copy()
     u_cl = np.zeros((M, nu, T), dtype=float)
     J_cl = np.zeros((T))
+    wall_clk = np.zeros((T))
 
     Xt = x0_val.copy()
+    x0_val_leader = x0_val[0, :] # store leader's current state
+    
+    # store current position of leader
+    xt_val_leader = x0_val_leader
 
     # simulation loop
     for t in range(T):
+        
+        set_xf(xt_val_leader)
 
         # set initial-state parameters
         opti = planner["opti"]
@@ -111,18 +156,23 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
         pred_X = shift_pred(X_opt)  # update shared predictions
         pred_U = shift_pred(U_opt)  # update shared predictions
 
-        
         for m in range(M):
             ut = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
 
             # apply first control, advance true states, shift warm starts, log
             xt = Xt[m].reshape((nx, 1))
-            xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
+            if mj:
+                xt_1 = f_np(xt, ut, w[m][t, :], mj_model, mj_data)
+            else:
+                xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
 
             x_cl[m, :, t + 1] = xt_1.flatten()
             u_cl[m, :, t] = ut.flatten()
             
             Xt[m] = xt_1.flatten()
+            
+            if m == 0:
+                xt_val_leader = Xt[0]
             
         J_cl[t] = sol.value(J)
 
@@ -134,6 +184,6 @@ def dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np,
     J_cl_avg = np.mean(J_cl)/M
     wall_clk_median = np.median(wall_clk)
 
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "distributed")
-    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "distributed", wall_clk_median)
-    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "distributed", wall_clk_median)
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "distributed_leader")
+    plot_xyz(M, x_cl, x0_val, xf_val_leader, J_cl_avg, obs, dyn, "distributed_leader", wall_clk_median)
+    animate_xyz_gif(M, x_cl, x0_val, xf_val_leader, J_cl_avg, obs, dyn, "distributed_leader", wall_clk_median)

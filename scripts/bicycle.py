@@ -1,11 +1,14 @@
 import casadi as ca    
 import numpy as np
-from src.distributed_mpc import dmpc_distributed
-from src.decentralized_mpc import dmpc_decentralized
-from src.decentralized_mpc_leader import dmpc_decentralized_leader
-from src.distributed_mpc_leader import dmpc_distributed_leader
-from src.distributed_mpc_rendezvous import dmpc_distributed_rendezvous
-from src.decentralized_mpc_rendezvous import dmpc_decentralized_rendezvous
+from src.distributed import distributed
+from src.decentralized import decentralized
+from src.decentralized_leader import decentralized_leader
+from src.distributed_leader import distributed_leader
+from src.distributed_rendezvous import distributed_rendezvous
+from src.decentralized_rendezvous import decentralized_rendezvous
+from config.dmpc_cfg import DistributedParams, DecentralizedParams
+from config.dyn_cfg import DynamicsParams
+from config.env_cfg import EnvParams, LeaderEnvParams, RendezvousEnvParams
 
 # =========================================================================
 # SETUP
@@ -116,15 +119,25 @@ def f_np(x, u):
 # =========================================================================
 # MPC CALLS
 # =========================================================================
+dyn_np_cfg = DynamicsParams(dyn="bicycle", f=f, f_np=f_np, nx=nx, nu=nu, U_lim=U_lim)
 
-dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
-dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")
+decentr_cfg_gauss = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="gauss-seidel")
+decentr_cfg_jacbi = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="jacobi")
+distr_cfg = DistributedParams(N=N, Q=Q, R=R, H=H, term=False)
 
-dmpc_decentralized_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-dmpc_decentralized_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
-dmpc_distributed_leader(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val[0, :], f, f_np, 0, obs, Q, R, H, False, "bicycle")
+rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, obs=obs, sigma=0)
+ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs, sigma=0)
+env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val=xf_val, obs=obs, sigma=0)
 
-dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "gauss-seidel", "bicycle")
-dmpc_decentralized(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "jacobi", "bicycle")
-dmpc_distributed(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, xf_val, f, f_np, 0, obs, Q, R, H, False, "bicycle")
+
+decentralized_rendezvous(dyn_np_cfg, decentr_cfg_gauss, rndzvs_env_cfg)
+decentralized_rendezvous(dyn_np_cfg, decentr_cfg_jacbi, rndzvs_env_cfg)
+distributed_rendezvous(dyn_np_cfg, distr_cfg, rndzvs_env_cfg)
+
+decentralized_leader(dyn_np_cfg, decentr_cfg_gauss, ldr_env_cfg)
+decentralized_leader(dyn_np_cfg, decentr_cfg_jacbi, ldr_env_cfg)
+distributed_leader(dyn_np_cfg, distr_cfg, ldr_env_cfg)
+
+decentralized(dyn_np_cfg, decentr_cfg_gauss, env_cfg)
+decentralized(dyn_np_cfg, decentr_cfg_jacbi, env_cfg)
+distributed(dyn_np_cfg, distr_cfg, env_cfg)

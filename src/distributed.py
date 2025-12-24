@@ -1,28 +1,21 @@
 import numpy as np
 import casadi as ca
+from dataclasses import asdict
 from utils.plot import *
 
-def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, sigma, obs, Q, R, H, term, dyn):
-
-    wall_clk = np.zeros((T))
+def distributed(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
+    
+    # parse configs        
+    if mj:
+        dyn, f, f_np, nx, nu, U_lim, mj_model, mj_data = asdict(dyn_cfg).values()
+    else:
+        dyn, f, f_np, nx, nu, U_lim = asdict(dyn_cfg).values()    N, Q, R, H, term = asdict(dmpc_cfg).values()
+    T, dt, M, d_min, x0_val, obs, sigma, xf_val = asdict(env_cfg).values()
 
     # helpers
     def shift_pred(X):
         return np.hstack([X[:, 1:], X[:, -1:]])
     
-    def sphere_target(x_self, x_other, radius):
-        # compute closest point on sphere of radius d_min around x_other to x_self
-        diff = x_other - x_self
-        dist_sq = ca.dot(diff, diff) + 1e-6  # squared distance with epsilon
-        dist = ca.sqrt(dist_sq)  # smooth sqrt of non-zero value
-        return x_other - radius * diff / dist
-
-    def set_xf(xt_val_others):
-        xt_val = np.roll(xt_val_others, shift=shift, axis=0)  # shift rows
-        planner["opti"].set_value(planner["xf"], xt_val.reshape(M * nx, 1))
-    
-    shift = -1
-
     # disturbances, per agent
     w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
 
@@ -38,8 +31,6 @@ def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_
         xf = opti.parameter(M * nx, 1)
 
         # set final states
-        x0_shifted = np.roll(x0_val, shift=shift, axis=0)  # shift rows
-        xf_val = x0_shifted
         opti.set_value(xf, xf_val.reshape((M * nx, 1)))
         
         # control bounds and initial condition constraint
@@ -62,9 +53,7 @@ def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_
                 uk = U[nu * m : nu * (m + 1), k]
                 xf_m = xf[nx * m : nx * (m + 1)]
 
-                # agents target sphere surface around other agents
-                xk_target = ca.vertcat(sphere_target(xk[0:3], xf_m[0:3], d_min), xf_m[3:])
-                J += ca.mtimes([(xk - xk_target).T, Q, (xk - xk_target)]) + ca.mtimes([uk.T, R, uk])
+                J += ca.mtimes([(xk - xf_m).T, Q, (xk - xf_m)]) + ca.mtimes([uk.T, R, uk])
 
                 # forward Euler
                 x_next = xk + dt * f(xk, uk)
@@ -80,13 +69,10 @@ def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_
         for m in range(M):
             xN = X[nx * m:nx * (m + 1), N]
             xfN = xf[nx * m:nx * (m + 1), 0]
-            xN_target = ca.vertcat(sphere_target(xN[0:3], xfN[0:3], d_min), xfN[3:])
-            J += ca.mtimes([(xN - xN_target).T, H, (xN - xN_target)])
-            if term:
-                # terminal constraint
-                opti.subject_to(ca.sumsqr(xN[0:3] - xfN[0:3]) == d_min ** 2) # be at distance d_min from target agent
-                opti.subject_to(xN[3:] == xfN[3:])
-        
+            J += ca.mtimes([(xN - xfN).T, H, (xN - xfN)])
+        if term:
+            opti.subject_to(X[:, N] == xf) # terminal constraint, xf
+
         # push initial interpolated predictions for warm-starting
         for m in range(M):
             x0_m = x0_val[m, :].reshape(nx, 1)
@@ -107,17 +93,13 @@ def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_
     x_cl[:, :, 0] = x0_val.copy()
     u_cl = np.zeros((M, nu, T), dtype=float)
     J_cl = np.zeros((T))
+    wall_clk = np.zeros((T))
 
     Xt = x0_val.copy()
-    
-    # store current position of others
-    xt_val_others = x0_val
 
     # simulation loop
     for t in range(T):
 
-        set_xf(xt_val_others)
-        
         # set initial-state parameters
         opti = planner["opti"]
         X = planner["X"]
@@ -135,19 +117,21 @@ def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_
         pred_X = shift_pred(X_opt)  # update shared predictions
         pred_U = shift_pred(U_opt)  # update shared predictions
 
+        
         for m in range(M):
             ut = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
 
             # apply first control, advance true states, shift warm starts, log
             xt = Xt[m].reshape((nx, 1))
-            xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
+            if mj:
+                xt_1 = f_np(xt, ut, w[m][t, :], mj_model, mj_data)
+            else:
+                xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
 
             x_cl[m, :, t + 1] = xt_1.flatten()
             u_cl[m, :, t] = ut.flatten()
             
             Xt[m] = xt_1.flatten()
-            
-            xt_val_others = Xt
             
         J_cl[t] = sol.value(J)
 
@@ -159,6 +143,6 @@ def dmpc_distributed_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_
     J_cl_avg = np.mean(J_cl)/M
     wall_clk_median = np.median(wall_clk)
 
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "distributed_rendezvous")
-    plot_xyz(M, x_cl, x0_val, None, J_cl_avg, obs, dyn, "distributed_rendezvous", wall_clk_median)
-    animate_xyz_gif(M, x_cl, x0_val, None, J_cl_avg, obs, dyn, "distributed_rendezvous", wall_clk_median)
+    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "distributed")
+    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "distributed", wall_clk_median)
+    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "distributed", wall_clk_median)
