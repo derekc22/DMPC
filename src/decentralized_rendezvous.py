@@ -1,11 +1,17 @@
 import numpy as np
 import casadi as ca
+from dataclasses import asdict
 from utils.plot import *
 
-def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, f_np, sigma, obs, Q, R, H, term, mode, dyn):
+def decentralized_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
     
-    wall_clk = np.zeros((M, T))
-
+    # parse configs        
+    if mj:
+        dyn, f, f_np, nx, nu, U_lim, mj_model, mj_data = asdict(dyn_cfg).values()
+    else:
+        dyn, f, f_np, nx, nu, U_lim = asdict(dyn_cfg).values()    N, Q, R, H, term, mode = asdict(dmpc_cfg).values()
+    T, dt, M, d_min, x0_val, obs, sigma = asdict(env_cfg).values()
+    
     # helpers
     def shift_pred(X):
         return np.hstack([X[:, 1:], X[:, -1:]])
@@ -113,6 +119,7 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
     x_cl[:, :, 0] = x0_val.copy()
     u_cl = np.zeros((M, nu, T), dtype=float)
     J_cl = np.zeros((M, T))
+    wall_clk = np.zeros((M, T))
 
     Xt = x0_val.copy()
     
@@ -155,7 +162,10 @@ def dmpc_decentralized_rendezvous(T, M, d_min, dt, N, nx, nu, U_lim, x0_val, f, 
             ut = U_opt[:, 0].reshape((nu, 1))
 
             # apply first control, advance true states, shift warm starts, log
-            xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
+            if mj:
+                xt_1 = f_np(xt, ut, w[m][t, :], mj_model, mj_data)
+            else:
+                xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
 
             x_cl[m, :, t + 1] = xt_1.flatten()
             u_cl[m, :, t] = ut.flatten()
