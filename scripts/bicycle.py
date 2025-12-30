@@ -80,7 +80,7 @@ H = ca.DM(np.eye(nx))
 # derived quantities
 x0_val = np.hstack([p0, theta0, v0])
 xf_val = np.hstack([pf, thetaf, vf])
-U_lim = [(delta_min, delta_max), (a_min, a_max)]
+u_lim = [(delta_min, delta_max), (a_min, a_max)]
 
 
 
@@ -91,7 +91,7 @@ U_lim = [(delta_min, delta_max), (a_min, a_max)]
 # =========================================================================
 
 # forward Euler integration
-def f(x, u):
+def f_plant(x, u):
     theta, v = x[3], x[4]
     delta, a = u[0], u[1]
     x_dot = v * ca.cos(theta)
@@ -102,7 +102,7 @@ def f(x, u):
     return ca.vcat([x_dot, y_dot, z_dot, theta_dot, v_dot])
 
 # non-CasADi forward Euler integration
-def f_np(x, u):
+def f_true(x, u):
     theta, v = x[3], x[4]
     delta, a = u[0], u[1]
     x_dot = v * np.cos(theta)
@@ -119,15 +119,15 @@ def f_np(x, u):
 # =========================================================================
 # MPC CALLS
 # =========================================================================
-dyn_np_cfg = DynamicsParams(dyn="bicycle", f=f, f_np=f_np, nx=nx, nu=nu, U_lim=U_lim)
+dyn_np_cfg = DynamicsParams(name="bicycle", f_plant=f_plant, f_true=f_true, nx=nx, nu=nu, u_lim=u_lim)
 
 decentr_cfg_gauss = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="gauss-seidel")
 decentr_cfg_jacbi = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="jacobi")
 distr_cfg = DistributedParams(N=N, Q=Q, R=R, H=H, term=False)
 
-rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, obs=obs, sigma=0)
-ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs, sigma=0)
-env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val=xf_val, obs=obs, sigma=0)
+rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, obs=obs)
+ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs)
+env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val=xf_val, obs=obs)
 
 
 decentralized_rendezvous(dyn_np_cfg, decentr_cfg_gauss, rndzvs_env_cfg)

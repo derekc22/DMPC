@@ -9,7 +9,6 @@ class EnvBase:
     d_min: float                # minimum separation distance
     x0_val: np.ndarray          # initial states
     obs: np.ndarray             # obstacle positions and radii
-    sigma: float                # disturbance stddev
     
 @dataclass(frozen=True)
 class EnvParams(EnvBase):

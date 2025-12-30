@@ -1,5 +1,7 @@
 import casadi as ca
 import numpy as np
+from scipy.spatial.transform import Rotation
+import mujoco
 from src.distributed import distributed
 from src.decentralized import decentralized
 from src.decentralized_leader import decentralized_leader
@@ -7,132 +9,84 @@ from src.distributed_leader import distributed_leader
 from src.distributed_rendezvous import distributed_rendezvous
 from src.decentralized_rendezvous import decentralized_rendezvous
 from config.dmpc_cfg import DistributedParams, DecentralizedParams
-from config.dyn_cfg import DynamicsParams
+from config.dyn_cfg import MuJoCoDynamicsParams
 from config.env_cfg import EnvParams, LeaderEnvParams, RendezvousEnvParams
-
-# =========================================================================
-# HELPERS
-# =========================================================================
-
-def skew_np(v):
-    return np.array([
-        [0.0,   -v[2],  v[1]],
-        [v[2],   0.0,  -v[0]],
-        [-v[1],  v[0],  0.0]
-    ])
-
-def skew_casadi(v):
-    return ca.vertcat(
-        ca.hcat([0,      -v[2],   v[1]]),
-        ca.hcat([v[2],    0,     -v[0]]),
-        ca.hcat([-v[1],   v[0],   0])
-    )
-
-def cross_casadi(a, b):
-    return ca.vertcat(
-        a[1]*b[2] - a[2]*b[1],
-        a[2]*b[0] - a[0]*b[2],
-        a[0]*b[1] - a[1]*b[0]
-    )
-
-def eul2rotm_zyx(yaw, pitch, roll):
-    cy, sy = np.cos(yaw), np.sin(yaw)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cr, sr = np.cos(roll), np.sin(roll)
-
-    Rz = np.array([
-        [cy, -sy, 0.0],
-        [sy,  cy, 0.0],
-        [0.0, 0.0, 1.0]
-    ])
-
-    Ry = np.array([
-        [ cp, 0.0, sp],
-        [0.0, 1.0, 0.0],
-        [-sp, 0.0, cp]
-    ])
-
-    Rx = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0,  cr, -sr],
-        [0.0,  sr,  cr]
-    ])
-
-    return Rz @ Ry @ Rx
-
-
-
-
+from config.xml_cfg import XMLParams
+from config.vis_cfg import VisualizationParams
+from utils.mj_utils import generate_xml, load_model, reset_model, init_vis
 
 # =========================================================================
 # SETUP
 # =========================================================================
 
 # number of agents
-M = 10
+M = 3
 
 # minimum separation distance
-d_min = 1.5
+d_min = 0.0
 
 # discretization
-dt = 0.05
-N = 10
-T = 50
+dt = 0.01
+N = 400
+T = 150
 
 # state and input dimensions
-nx = 12  
-nu = 4
+nx = 6
+nu = 3
 
-# states
-# p:     3D position (global frame)
-# euler: ZYX Euler angles - yaw, pitch, roll
-# v:     3D linear velocity (global frame)
-# wb:    3D angular velocity (body frame)
-
-# inputs
-# F:     upward thrust - F1, F2, F3, F4
+nq = 7
+nv = 6
+na = 4
 
 # geometric
 # arm length
 d = 0.2  # [m] 
 
 # dynamics & inertia
-m = 0.5      # [kg]
+mass = 0.5      # [kg]
 Ixxb = 0.01  # [kg m^2]
 Iyyb = 0.01  # [kg m^2]
-Izzb = 0.05  # [kg m^2]
+Izzb = 0.005  # [kg m^2]
 
 # initial conditions
-p0 = np.hstack([np.random.uniform(-50, 50, (M, 2)), np.random.uniform(0, 50, (M, 1))]) # [m]
-euler0 = np.zeros((M, 3))  # [rad]
-v0 = np.zeros((M, 3))      # [m/s]
-wb0 = np.zeros((M, 3))     # [rad/s]
+p0_true = np.hstack([np.random.uniform(-5, 5, (M, 2)), np.random.uniform(1, 5, (M, 1))]) # [m]
+quat0_true = np.tile([1.0, 0.0, 0.0, 0.0], (M, 1))  # [w, x, y, z] identity quaternion
+v0_true = np.zeros((M, 3))      # [m/s]
+wb0_true = np.zeros((M, 3))     # [rad/s]
+
+p0 = p0_true.copy()
+v0 = v0_true.copy()
 
 # final conditions
-pf = np.hstack([np.random.uniform(-50, 50, (M, 2)), np.random.uniform(0, 50, (M, 1))])
-vf = np.zeros((M, 3))       # [rad]
-eulerf = np.zeros((M, 3))   # [m/s]
-wbf = np.zeros((M, 3))      # [rad/s]
+pf = np.hstack([np.random.uniform(-5, 5, (M, 2)), np.random.uniform(5, 10, (M, 1))])
+vf = np.zeros((M, 3))   # [m/s]
 
-# input bounds [f1, f2, f3, f4]
-f_min = 0      # [N]
-f_max = 20.0   # [N]
+# input bounds [fx, fy, fz]
+f_min_x = -1.00   # [N]
+f_max_x =  1.00   # [N]
+f_min_y = -1.00   # [N]
+f_max_y =  1.00   # [N]
+f_min_z =  0.00   # [N]
+f_max_z =  5.00   # [N]
+
+# Rotor thrust limits for allocation/clipping (these are actuator-space limits).
+# Kept local to avoid changing non-dynamics parts of the file.
+rotor_f_min = 0.0
+rotor_f_max = 30.0
 
 # number of obstacles
-n_obs = 3
-p_obs = np.hstack([np.random.uniform(-50, 50, (n_obs, 2)), np.random.uniform(0, 50, (n_obs, 1))])
-r_obs = np.random.uniform(1, 10, (n_obs, 1))
+n_obs = 0
+p_obs = np.hstack([np.random.uniform(-5, 5, (n_obs, 2)), np.random.uniform(0, 5, (n_obs, 1))])
+r_obs = np.random.uniform(0.1, 0.5, (n_obs, 1))
 obs = np.hstack([p_obs, r_obs])
 
 # cost matrices
 Q = ca.DM([
-    50, 50, 50,         # position
-    1e-3, 1e-3, 1e-3,   # euler angles
-    1, 1, 1,            # linear velocity
-    1e-3, 1e-3, 1e-3       # angular velocity
+    5, 5, 5,     # position
+    1, 1, 1,     # linear velocity
 ])
 Q = ca.diag(Q)
-R = ca.DM(np.eye(nu))
+R = 2*ca.DM(np.eye(nu))
 H = 10.0 * Q
 
 
@@ -143,32 +97,28 @@ H = 10.0 * Q
 # DERIVED VARIABLES
 # =========================================================================
 
-x0_val = np.hstack([p0, euler0, v0, wb0])
-xf_val = np.hstack([pf, eulerf, vf, wbf])
+q0_val = np.hstack([p0_true, quat0_true, v0_true, wb0_true])
+x0_val = np.hstack([p0, v0])
+xf_val= np.hstack([pf, vf])
 
-U_lim = [(f_min, f_max), (f_min, f_max), (f_min, f_max), (f_min, f_max)]
+u_lim = [(f_min_x, f_max_x), (f_min_y, f_max_y), (f_min_z, f_max_z)]
 
 # inertia matrices
 Ib_np = np.diag([Ixxb, Iyyb, Izzb])
-Ib_inv_np = np.linalg.inv(Ib_np)
+Ib_mnv_np = np.linalg.inv(Ib_np)
 
 Ib = ca.diag(ca.DM([Ixxb, Iyyb, Izzb]))
-Ib_inv = ca.inv(Ib)
+Ib_mnv = ca.inv(Ib)
 
 # gravity (world frame)
 g_val = 9.81
 g_vec = np.array([0.0, 0.0, -g_val])
 
 # rotor positions in body frame
-r1_np = np.array([ d, 0.0, 0.0])
-r2_np = np.array([ 0.0, d, 0.0])
-r3_np = np.array([-d, 0.0, 0.0])
-r4_np = np.array([ 0.0,-d, 0.0])
-
-r1 = ca.DM(r1_np)
-r2 = ca.DM(r2_np)
-r3 = ca.DM(r3_np)
-r4 = ca.DM(r4_np)
+r1 = ca.DM([ d, 0.0, 0.0])
+r2 = ca.DM([ 0.0, d, 0.0])
+r3 = ca.DM([-d, 0.0, 0.0])
+r4 = ca.DM([ 0.0,-d, 0.0])
 
 
 
@@ -178,190 +128,264 @@ r4 = ca.DM(r4_np)
 # DYNAMICS FUNCTIONS
 # =========================================================================
 
-def f(x, u):
-    # x: (12,1), u: (4,1)  ->  dx: (12,1)
-
+def f_plant(x, u):
+    # x: (6,1), u: (3,1)  ->  dx: (6,1)
     # unpack
-    yaw   = x[3]
-    pitch = x[4]
-    roll  = x[5]
-    v     = x[6:9]      # 3x1
-    wb    = x[9:12]     # 3x1
-    p_b, q_b, r_b = wb[0], wb[1], wb[2]
-
-    # rotor forces in body frame
-    F1b = ca.vertcat(0, 0, u[0])
-    F2b = ca.vertcat(0, 0, u[1])
-    F3b = ca.vertcat(0, 0, u[2])
-    F4b = ca.vertcat(0, 0, u[3])
-
-    # rotation R = Rz(yaw) * Ry(pitch) * Rx(roll)
-    cy, sy = ca.cos(yaw),   ca.sin(yaw)
-    cp, sp = ca.cos(pitch), ca.sin(pitch)
-    cr, sr = ca.cos(roll),  ca.sin(roll)
-
-    Rz = ca.vertcat(
-        ca.hcat([cy, -sy, 0]),
-        ca.hcat([sy,  cy, 0]),
-        ca.hcat([0,   0,  1]),
-    )
-    Ry = ca.vertcat(
-        ca.hcat([ cp, 0, sp]),
-        ca.hcat([ 0,  1, 0]),
-        ca.hcat([-sp, 0, cp]),
-    )
-    Rx = ca.vertcat(
-        ca.hcat([1, 0, 0]),
-        ca.hcat([0, cr, -sr]),
-        ca.hcat([0, sr,  cr]),
-    )
-    R = Rz @ Ry @ Rx
-
-    # Euler-rate mapping ZYX
-    tan_theta = ca.tan(pitch)
-    sec_theta = 1.0 / ca.cos(pitch)
-    roll_dot  = p_b + sr * tan_theta * q_b + cr * tan_theta * r_b
-    pitch_dot = cr * q_b - sr * r_b
-    yaw_dot   = sr * sec_theta * q_b + cr * sec_theta * r_b
-
-    # cross for 3x1 columns
-    def cross(a, b):
-        return ca.vertcat(
-            a[1]*b[2] - a[2]*b[1],
-            a[2]*b[0] - a[0]*b[2],
-            a[0]*b[1] - a[1]*b[0],
-        )
-
-    # torques from lever arms, no yaw drag torque
-    tau = (cross(r1, F1b)
-         + cross(r2, F2b)
-         + cross(r3, F3b)
-         + cross(r4, F4b)
-         - cross(wb, Ib @ wb))
-
-    # angular acceleration
-    wb_dot = Ib_inv @ tau                      # 3x1
-
-    # translational acceleration in world
-    Fb_total = F1b + F2b + F3b + F4b           # 3x1
-    F_world  = R @ Fb_total                    # 3x1
+    v     = x[3:]     # 3x1
+    
     g_col    = ca.DM([[0.0], [0.0], [-g_val]]) # 3x1
-    v_dot    = F_world / m + g_col             # 3x1
 
     # state derivative, order matches the state
     dx = ca.vertcat(
         v,
-        ca.vertcat(yaw_dot, pitch_dot, roll_dot),
-        v_dot,
-        wb_dot,
+        u/mass + g_col,
     )
     return dx
 
-def f_np(x, u):
-    # x: (12,1), u: (4,1)  ->  dx: (12,1)
+def quat_to_rotmat_wxyz(quat_wxyz: np.ndarray) -> np.ndarray:
+    """Convert mujoco quaternion (w, x, y, z) to a 3x3 rotation matrix."""
+    quat_wxyz = np.asarray(quat_wxyz, dtype=float).reshape(4,)
+    mat9 = np.zeros(9, dtype=float)
+    mujoco.mju_quat2Mat(mat9, quat_wxyz)
+    return mat9.reshape(3, 3)
 
-    # unpack using
-    yaw   = x[3][0]
-    pitch = x[4][0]
-    roll  = x[5][0]
-    v     = x[6:9]          # (3,1)
-    wb    = x[9:12]         # (3,1)
-    p_b, q_b, r_b = wb[0][0], wb[1][0], wb[2][0]
 
-    # rotor forces in body frame, 3x1 columns
-    F1b = np.array([[0.0], [0.0], [u[0, 0]]])
-    F2b = np.array([[0.0], [0.0], [u[1, 0]]])
-    F3b = np.array([[0.0], [0.0], [u[2, 0]]])
-    F4b = np.array([[0.0], [0.0], [u[3, 0]]])
+def vee_so3(S: np.ndarray) -> np.ndarray:
+    """vee operator for a 3x3 skew-symmetric matrix."""
+    return np.array([S[2, 1], S[0, 2], S[1, 0]], dtype=float)
 
-    # rotation R = Rz(yaw) * Ry(pitch) * Rx(roll)
-    cy, sy = np.cos(yaw),   np.sin(yaw)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cr, sr = np.cos(roll),  np.sin(roll)
 
-    Rz = np.array([[cy, -sy, 0.0],
-                   [sy,  cy, 0.0],
-                   [0.0, 0.0, 1.0]])
-    Ry = np.array([[ cp, 0.0, sp],
-                   [0.0, 1.0, 0.0],
-                   [-sp, 0.0, cp]])
-    Rx = np.array([[1.0, 0.0, 0.0],
-                   [0.0,  cr, -sr],
-                   [0.0,  sr,  cr]])
-    R = Rz @ Ry @ Rx
+def desired_rotation_from_fnet(Fnet_w: np.ndarray, psi: float) -> np.ndarray:
+    """Construct desired body-to-world rotation R_d given net force direction and yaw."""
+    Fnet_w = np.asarray(Fnet_w, dtype=float).reshape(3,)
+    nF = np.linalg.norm(Fnet_w)
+    if nF < 1e-8:
+        # Degenerate, fall back to level attitude.
+        return np.eye(3)
 
-    # Euler-rate mapping ZYX
-    tan_theta = np.tan(pitch)
-    sec_theta = 1.0 / np.cos(pitch)
-    roll_dot  = p_b + sr * tan_theta * q_b + cr * tan_theta * r_b
-    pitch_dot = cr * q_b - sr * r_b
-    yaw_dot   = sr * sec_theta * q_b + cr * sec_theta * r_b
+    b3d = Fnet_w / nF
 
-    # cross for 3x1 columns
-    def cross(a, b):
-        ax, ay, az = a[0, 0], a[1, 0], a[2, 0]
-        bx, by, bz = b[0, 0], b[1, 0], b[2, 0]
-        return np.array([[ay*bz - az*by],
-                         [az*bx - ax*bz],
-                         [ax*by - ay*bx]])
+    b1psi = np.array([np.cos(psi), np.sin(psi), 0.0], dtype=float)
+    # Project b1psi onto plane orthogonal to b3d
+    b1 = b1psi - np.dot(b1psi, b3d) * b3d
+    nb1 = np.linalg.norm(b1)
+    if nb1 < 1e-8:
+        # Yaw singularity when b3d is parallel to b1psi, pick an arbitrary orthogonal axis.
+        tmp = np.array([1.0, 0.0, 0.0], dtype=float)
+        b1 = tmp - np.dot(tmp, b3d) * b3d
+        nb1 = np.linalg.norm(b1)
+        if nb1 < 1e-8:
+            tmp = np.array([0.0, 1.0, 0.0], dtype=float)
+            b1 = tmp - np.dot(tmp, b3d) * b3d
+            nb1 = np.linalg.norm(b1)
+    b1d = b1 / nb1
 
-    # arm vectors as 3x1 columns
-    r1c = np.array([[ r1_np[0]], [ r1_np[1]], [ r1_np[2]]])
-    r2c = np.array([[ r2_np[0]], [ r2_np[1]], [ r2_np[2]]])
-    r3c = np.array([[ r3_np[0]], [ r3_np[1]], [ r3_np[2]]])
-    r4c = np.array([[ r4_np[0]], [ r4_np[1]], [ r4_np[2]]])
+    b2d = np.cross(b3d, b1d)
+    b2d = b2d / max(np.linalg.norm(b2d), 1e-12)
 
-    # torques from lever arms, no yaw drag torque
-    tau = (cross(r1c, F1b)
-         + cross(r2c, F2b)
-         + cross(r3c, F3b)
-         + cross(r4c, F4b)
-         - cross(wb, Ib_np @ wb))
+    Rd = np.column_stack([b1d, b2d, b3d])
+    return Rd
 
-    # angular acceleration
-    wb_dot = Ib_inv_np @ tau                 # (3,1)
 
-    # translational acceleration in world
-    Fb_total = F1b + F2b + F3b + F4b         # (3,1)
-    F_world  = R @ Fb_total                  # (3,1)
-    g_col    = np.array([[0.0], [0.0], [-g_val]])
-    v_dot    = F_world / m + g_col           # (3,1)
+def attitude_pd_so3(R: np.ndarray,
+                    omega_b: np.ndarray,
+                    Rd: np.ndarray,
+                    J: np.ndarray,
+                    kR: float,
+                    kW: float) -> np.ndarray:
+    """Geometric PD attitude controller on SO(3). Returns body torque tau (3,)."""
+    R = np.asarray(R, dtype=float).reshape(3, 3)
+    Rd = np.asarray(Rd, dtype=float).reshape(3, 3)
+    omega_b = np.asarray(omega_b, dtype=float).reshape(3,)
+    J = np.asarray(J, dtype=float).reshape(3, 3)
 
-    # state derivative, order matches the state
-    dx = np.vstack([
-        v,
-        np.array([[yaw_dot], [pitch_dot], [roll_dot]]),
-        v_dot,
-        wb_dot,
-    ])
-    return dx  # (12,1)
+    eR_mat = Rd.T @ R - R.T @ Rd
+    eR = 0.5 * vee_so3(eR_mat)
+
+    # Desired body rates are zero in this minimal implementation.
+    eW = omega_b
+
+    tau = -kR * eR - kW * eW + np.cross(omega_b, J @ omega_b)
+
+    # This mujoco actuator model has no rotor drag torque, so yaw authority is absent.
+    tau[2] = 0.0
+    return tau
+
+
+def allocate_thrust_torque_to_rotors(T: float,
+                                    tau_xy: np.ndarray,
+                                    arm: float,
+                                    f_min: float,
+                                    f_max: float) -> np.ndarray:
+    """Allocate total thrust and roll/pitch torque into 4 rotor thrusts.
+
+    Rotor order matches the actuator XML:
+      1) green  at (0, +d)
+      2) red    at (+d, 0)
+      3) blue   at (-d, 0)
+      4) black  at (0, -d)
+
+    With forces along body +z, the moment from rotor i is r_i x (f_i e3):
+      tau_x = d (f_green - f_black)
+      tau_y = d (f_blue  - f_red)
+
+    There is no yaw torque term in this actuator model.
+    """
+    tau_xy = np.asarray(tau_xy, dtype=float).reshape(2,)
+    tau_x, tau_y = float(tau_xy[0]), float(tau_xy[1])
+
+    A = np.array([
+        [1.0, 1.0, 1.0, 1.0],
+        [arm, 0.0, 0.0, -arm],
+        [0.0, -arm, arm, 0.0],
+    ], dtype=float)
+    b = np.array([float(T), tau_x, tau_y], dtype=float)
+
+    # Minimum-norm solution
+    f = A.T @ np.linalg.solve(A @ A.T, b)
+
+    f = np.clip(f, f_min, f_max)
+    return f
+
+
+def f_true(m, mj_model, mj_data, mu):
+    """True mujoco step with a low-level geometric controller.
+
+    IMPORTANT CONSISTENCY:
+    The reduced model used by MPC is:
+        p_dot = v
+        v_dot = u/mass + g
+    Therefore, the MPC input u (here: mu) corresponds to the WORLD-frame thrust force
+    (i.e., the force produced by the rotors along body b3, expressed in world frame).
+    Gravity is already handled by +g in the reduced model and by mujoco, so we DO NOT
+    add mass*g again here.
+
+    Mapping:
+      F_des_w = mu
+      R_d     from (F_des_w, yaw)
+      T       = F_des_w^T (R e3)   (project desired force onto current thrust axis)
+      tau     = SO(3) PD torque (roll/pitch only)
+      f_i     rotor thrust commands
+    """
+    # --- parameters ---
+    arm = float(d)    # rotor arm length used in XML site positions
+    kR = 6.0
+    kW = 0.8
+    psi_des = 0.0
+
+
+    # Desired WORLD-frame thrust force from MPC
+    Fdes_w = np.asarray(mu, dtype=float).reshape(3,)
+
+    qpos = mj_data.qpos.reshape(M, nq)[m]
+    qvel = mj_data.qvel.reshape(M, nv)[m]
+
+    quat_wxyz = qpos[3:7]
+    R_bw = quat_to_rotmat_wxyz(quat_wxyz)  # body-to-world
+    omega = qvel[3:6]
+
+    Rd = desired_rotation_from_fnet(Fdes_w, psi_des)
+
+    e3 = np.array([0.0, 0.0, 1.0], dtype=float)
+    b3 = R_bw @ e3
+
+    # Total thrust magnitude along current b3 needed to realize the requested force
+    T = float(np.dot(Fdes_w, b3))
+    T = float(np.clip(T, 0.0, 4.0 * rotor_f_max))
+
+    tau = attitude_pd_so3(R_bw, omega, Rd, Ib_np, kR, kW)
+
+    rotor_f = allocate_thrust_torque_to_rotors(T, tau[:2], arm, rotor_f_min, rotor_f_max)
+
+    ctrl_start = int(m) * int(na)
+    mj_data.ctrl[ctrl_start:ctrl_start + na] = rotor_f
+    mujoco.mj_step(mj_model, mj_data)
+
+    xpos = mj_data.qpos.reshape(M, nq)[m]
+    xvel = mj_data.qvel.reshape(M, nv)[m]
+
+    x = np.hstack([xpos[:3], xvel[:3]])
+    return x  # (6,)
 
 
 
 
 
 # =========================================================================
-# MPC CALLS
+# MUJOCO INITIALIZATION
 # =========================================================================
-dyn_np_cfg = DynamicsParams(dyn="drone", f=f, f_np=f_np, nx=nx, nu=nu, U_lim=U_lim)
+
+agent_xml = f"""                
+            <body name="agent_m" pos="0 0 0">
+                <inertial pos="0 0 0" mass="{mass}" diaginertia="{Ixxb} {Iyyb} {Izzb}"/> 
+                <joint type="free"/>
+
+                <geom name="green_arm_m" type="box" pos="     0   {d/2}  0" size="0.01  {d/2}  0.01" rgba="0 1 0 1" />
+                <geom name="red_arm_m"   type="box" pos=" {d/2}       0  0" size="{d/2}  0.01  0.01" rgba="1 0 0 1" />
+                <geom name="blue_arm_m"  type="box" pos="-{d/2}       0  0" size="{d/2}  0.01  0.01" rgba="0 0 1 1" />
+                <geom name="black_arm_m" type="box" pos="     0  -{d/2}  0" size="0.01  {d/2}  0.01" rgba="0 0 0 1" />
+
+                <site name="green_prop_m" type="box" size=".01 .01 .02" pos="    0   {d}  0.01" quat="1 0 0 0" rgba="1 1 1 1" />
+                <site name="red_prop_m"   type="box" size=".01 .01 .02" pos="  {d}     0  0.01" quat="1 0 0 0" rgba="1 1 1 1" />
+                <site name="blue_prop_m"  type="box" size=".01 .01 .02" pos=" -{d}     0  0.01" quat="1 0 0 0" rgba="1 1 1 1" />
+                <site name="black_prop_m" type="box" size=".01 .01 .02" pos="    0  -{d}  0.01" quat="1 0 0 0" rgba="1 1 1 1" />
+            </body>
+"""
+
+actuator_xml = f"""
+            <general site="green_prop_m"  gear="0 0 1 0 0 0"  ctrlrange="{rotor_f_min} {rotor_f_max}"  ctrllimited="true"/>
+            <general site="red_prop_m"    gear="0 0 1 0 0 0"  ctrlrange="{rotor_f_min} {rotor_f_max}"  ctrllimited="true"/>
+            <general site="blue_prop_m"   gear="0 0 1 0 0 0"  ctrlrange="{rotor_f_min} {rotor_f_max}"  ctrllimited="true"/>
+            <general site="black_prop_m"  gear="0 0 1 0 0 0"  ctrlrange="{rotor_f_min} {rotor_f_max}"  ctrllimited="true"/>
+"""
+
+xml_cfg = XMLParams(name="drone", agent_xml=agent_xml, actuator_xml=actuator_xml, gravity=g_val, dt=dt, M=M, nq=nq, q0_val=q0_val, obs=obs)
+xml = generate_xml(xml_cfg)
+
+mj_model, mj_data = load_model(xml)
+reset_model(mj_model, mj_data)
+
+presets = {
+    "distance": 2, 
+    "azimuth": 0, 
+    "elevation": -30
+}
+vis_cfg = VisualizationParams(presets=presets, 
+                              track=True, 
+                              show_world_csys=True, 
+                              show_body_csys=True, 
+                              vid_width=1280, 
+                              vid_height=720,
+                              vid_fps=30.0,
+                              enable_viewer=False)
+
+init_vis(mj_model, mj_data, vis_cfg=vis_cfg)
+
+
+
+
+
+# =========================================================================
+# CONFIGS
+# =========================================================================
+dyn_mj_cfg = MuJoCoDynamicsParams(name="drone", f_plant=f_plant, f_true=f_true, nx=nx, nu=nu, u_lim=u_lim, mj_model=mj_model, mj_data=mj_data)
 
 decentr_cfg_gauss = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="gauss-seidel")
 decentr_cfg_jacbi = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="jacobi")
 distr_cfg = DistributedParams(N=N, Q=Q, R=R, H=H, term=False)
 
-rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, obs=obs, sigma=0)
-ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs, sigma=0)
-env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val=xf_val, obs=obs, sigma=0)
+rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, obs=obs)
+ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs)
+env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val=xf_val, obs=obs)
 
+decentralized_rendezvous(dyn_mj_cfg, decentr_cfg_gauss, rndzvs_env_cfg, use_mj=True, vis_cfg=vis_cfg)
+decentralized_rendezvous(dyn_mj_cfg, decentr_cfg_jacbi, rndzvs_env_cfg, use_mj=True, vis_cfg=vis_cfg)
+distributed_rendezvous(dyn_mj_cfg, distr_cfg, rndzvs_env_cfg, use_mj=True, vis_cfg=vis_cfg)
 
-decentralized_rendezvous(dyn_np_cfg, decentr_cfg_gauss, rndzvs_env_cfg)
-decentralized_rendezvous(dyn_np_cfg, decentr_cfg_jacbi, rndzvs_env_cfg)
-distributed_rendezvous(dyn_np_cfg, distr_cfg, rndzvs_env_cfg)
+decentralized_leader(dyn_mj_cfg, decentr_cfg_gauss, ldr_env_cfg, use_mj=True, vis_cfg=vis_cfg)
+decentralized_leader(dyn_mj_cfg, decentr_cfg_jacbi, ldr_env_cfg, use_mj=True, vis_cfg=vis_cfg)
+distributed_leader(dyn_mj_cfg, distr_cfg, ldr_env_cfg, use_mj=True, vis_cfg=vis_cfg)
 
-decentralized_leader(dyn_np_cfg, decentr_cfg_gauss, ldr_env_cfg)
-decentralized_leader(dyn_np_cfg, decentr_cfg_jacbi, ldr_env_cfg)
-distributed_leader(dyn_np_cfg, distr_cfg, ldr_env_cfg)
-
-decentralized(dyn_np_cfg, decentr_cfg_gauss, env_cfg)
-decentralized(dyn_np_cfg, decentr_cfg_jacbi, env_cfg)
-distributed(dyn_np_cfg, distr_cfg, env_cfg)
+decentralized(dyn_mj_cfg, decentr_cfg_gauss, env_cfg, use_mj=True, vis_cfg=vis_cfg)
+decentralized(dyn_mj_cfg, decentr_cfg_jacbi, env_cfg, use_mj=True, vis_cfg=vis_cfg)
+distributed(dyn_mj_cfg, distr_cfg, env_cfg, use_mj=True, vis_cfg=vis_cfg)
