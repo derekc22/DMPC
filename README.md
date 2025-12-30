@@ -2,16 +2,10 @@
 
 This project implements Distributed and Decentralized Model Predictive Control (DMPC) strategies for multi-agent systems using **CasADi**.
 
-<table>
-  <tr>
-    <td>
-      <img src="media/thumbnail.gif" height="375">
-    </td>
-    <td>
-      <img src="media/thumbnail2.gif" height="375">
-    </td>
-  </tr>
-</table>
+<div>
+  <img src="media/thumbnail.gif" height="375">
+  <img src="media/thumbnail2.gif" height="375">
+</div>
 
 
 ## Features
@@ -80,11 +74,16 @@ conda activate dmpc
 
 ## Usage
 
-Run the `<model>.py` scripts. Plots are saved to the `plots/` directory.
+Run the `<model>.py` scripts. Figures are saved to the `figures/` directory.
 ```bash
 python3 -m scripts.bicycle # Bicycle dynamics
 python3 -m scripts.dbl_int # Double integrator dynamics
 python3 -m scripts.drone   # Drone dynamics
+
+# Or, to re-run simulations until successful completion:
+./run.sh bicycle
+./run.sh dbl_int
+./run.sh drone
 ```
 
 ## Structure
@@ -107,4 +106,3 @@ python3 -m scripts.drone   # Drone dynamics
 - `mj_utils.py`: MuJoCo utilities for XML generation, visualization, etc.
 
 `run.sh`: Shell script to re-run example scripts repeatedly until all simulations complete successfully.
-  - Usage: `bash run.sh model_name` (e.g., `bash run.sh bicycle`).
