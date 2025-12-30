@@ -11,7 +11,8 @@ runs=0
 while true; do
   runs=$((runs + 1))
 
-  python3 -m "scripts.$module"
+  # python3 -m "scripts.$module"
+  mjpython -m "scripts.$module"
   rc=$?
 
   echo "exit_code=$rc"

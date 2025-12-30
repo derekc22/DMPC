@@ -1,16 +1,38 @@
 import numpy as np
 import casadi as ca
-from dataclasses import asdict
-from utils.plot import *
+from utils.plot_utils import *
+from utils.mj_utils import mj_vis_step, mj_cleanup
 
-def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
+def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
     
-    # parse configs        
-    if mj:
-        dyn, f, f_np, nx, nu, U_lim, mj_model, mj_data = asdict(dyn_cfg).values()
-    else:
-        dyn, f, f_np, nx, nu, U_lim = asdict(dyn_cfg).values()    N, Q, R, H, term = asdict(dmpc_cfg).values()
-    T, dt, M, d_min, x0_val, obs, sigma = asdict(env_cfg).values()
+    # parse configs
+    name, f_plant, f_true, nx, nu, u_lim = (
+        dyn_cfg.name,
+        dyn_cfg.f_plant,
+        dyn_cfg.f_true,
+        dyn_cfg.nx,
+        dyn_cfg.nu,
+        dyn_cfg.u_lim,
+    )
+    if use_mj:
+        mj_model, mj_data = dyn_cfg.mj_model, dyn_cfg.mj_data
+
+    N, Q, R, H, term = (
+        dmpc_cfg.N,
+        dmpc_cfg.Q,
+        dmpc_cfg.R,
+        dmpc_cfg.H,
+        dmpc_cfg.term,
+    )
+
+    T, dt, M, d_min, x0_val, obs = (
+        env_cfg.T,
+        env_cfg.dt,
+        env_cfg.M,
+        env_cfg.d_min,
+        env_cfg.x0_val,
+        env_cfg.obs,
+    )
 
     # helpers
     def shift_pred(X):
@@ -19,8 +41,7 @@ def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
     def sphere_target(x_self, x_other, radius):
         # compute closest point on sphere of radius d_min around x_other to x_self
         diff = x_other - x_self
-        dist_sq = ca.dot(diff, diff) + 1e-6  # squared distance with epsilon
-        dist = ca.sqrt(dist_sq)  # smooth sqrt of non-zero value
+        dist = ca.sqrt(ca.dot(diff, diff) + 1e-6)  # magnitude
         return x_other - radius * diff / dist
 
     def set_xf(xt_val_others):
@@ -28,9 +49,6 @@ def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
         planner["opti"].set_value(planner["xf"], xt_val.reshape(M * nx, 1))
     
     shift = -1
-
-    # disturbances, per agent
-    w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
 
     pred_X = np.zeros((M * nx, N + 1))
     pred_U = np.zeros((M * nu, N))
@@ -52,7 +70,7 @@ def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
         opti.subject_to(X[:, 0] == x0)
         for m in range(M):
             for i in range(nu):
-                opti.subject_to(opti.bounded(U_lim[i][0], U[nu * m + i, :], U_lim[i][1]))
+                opti.subject_to(opti.bounded(u_lim[i][0], U[nu * m + i, :], u_lim[i][1]))
 
             # obstacle constraint, center (xo,yo,zo), radius ro
             xz = X[nx * m : nx * (m + 1), :]
@@ -73,7 +91,7 @@ def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
                 J += ca.mtimes([(xk - xk_target).T, Q, (xk - xk_target)]) + ca.mtimes([uk.T, R, uk])
 
                 # forward Euler
-                x_next = xk + dt * f(xk, uk)
+                x_next = xk + dt * f_plant(xk, uk)
                 opti.subject_to(X[nx * m : nx * (m + 1), k + 1] == x_next)
 
                 # collision avoidance, pairwise
@@ -139,6 +157,9 @@ def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
         X_opt = sol.value(X)
         U_opt = sol.value(U)
         
+        J_cl[t] = sol.value(J)
+        wall_clk[t] = sol.stats()["t_wall_total"]
+        
         pred_X = shift_pred(X_opt)  # update shared predictions
         pred_U = shift_pred(U_opt)  # update shared predictions
 
@@ -147,10 +168,12 @@ def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
 
             # apply first control, advance true states, shift warm starts, log
             xt = Xt[m].reshape((nx, 1))
-            if mj:
-                xt_1 = f_np(xt, ut, w[m][t, :], mj_model, mj_data)
+            if use_mj:
+                xt_1 = f_true(m, mj_model, mj_data, ut)
+                if vis_cfg is not None:
+                    mj_vis_step(mj_data, vis_cfg)
             else:
-                xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
+                xt_1 = xt + dt * f_true(xt, ut)
 
             x_cl[m, :, t + 1] = xt_1.flatten()
             u_cl[m, :, t] = ut.flatten()
@@ -159,16 +182,17 @@ def distributed_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
             
             xt_val_others = Xt
             
-        J_cl[t] = sol.value(J)
-
-        wall_clk[t] = sol.stats()["t_wall_total"]
 
             
     # plot
-    t_max = T * dt
-    J_cl_avg = np.mean(J_cl)/M
-    wall_clk_median = np.median(wall_clk)
+    print("success, exiting...")
 
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "distributed_rendezvous")
-    plot_xyz(M, x_cl, x0_val, None, J_cl_avg, obs, dyn, "distributed_rendezvous", wall_clk_median)
-    animate_xyz_gif(M, x_cl, x0_val, None, J_cl_avg, obs, dyn, "distributed_rendezvous", wall_clk_median)
+    J_avg = np.mean(J_cl)/M
+    wall_clk = np.median(wall_clk)
+
+    plot_t(env_cfg, x_cl, u_cl, J_avg, name, "distributed_rendezvous")
+    plot_xyz(env_cfg, x_cl, J_avg, wall_clk, name, "distributed_rendezvous", )
+    animate_xyz_gif(env_cfg, x_cl, J_avg, wall_clk, name, "distributed_rendezvous", )
+    
+    if vis_cfg is not None: 
+        mj_cleanup(vis_cfg, name, "distributed_rendezvous")

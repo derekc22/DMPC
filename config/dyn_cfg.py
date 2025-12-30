@@ -5,14 +5,14 @@ import mujoco
 
 @dataclass(frozen=True)
 class DynamicsParams:
-    dyn: str
-    f: Callable
-    f_np: Callable
-    nx: int
-    nu: int
-    U_lim: np.ndarray
+    name: str           # dynamics type
+    f_plant: Callable   # plant dynamics
+    f_true: Callable    # true dynamics
+    nx: int             # plant state dimension
+    nu: int             # plant input dimension
+    u_lim: np.ndarray   # plant input limits
     
 @dataclass(frozen=True)
 class MuJoCoDynamicsParams(DynamicsParams):
-    mj_model: mujoco.MjModel
-    mj_data: mujoco.MjData
+    mj_model: mujoco.MjModel    # MuJoCo model object
+    mj_data: mujoco.MjData      # MuJoCo data object

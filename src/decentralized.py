@@ -1,16 +1,40 @@
 import numpy as np
 import casadi as ca
-from dataclasses import asdict
-from utils.plot import *
+from utils.plot_utils import *
+from utils.mj_utils import mj_vis_step, mj_cleanup
 
-def decentralized(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
+def decentralized(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
     
-    # parse configs        
-    if mj:
-        dyn, f, f_np, nx, nu, U_lim, mj_model, mj_data = asdict(dyn_cfg).values()
-    else:
-        dyn, f, f_np, nx, nu, U_lim = asdict(dyn_cfg).values()    N, Q, R, H, term, mode = asdict(dmpc_cfg).values()
-    T, dt, M, d_min, x0_val, obs, sigma, xf_val = asdict(env_cfg).values()
+    # parse configs
+    name, f_plant, f_true, nx, nu, u_lim = (
+        dyn_cfg.name,
+        dyn_cfg.f_plant,
+        dyn_cfg.f_true,
+        dyn_cfg.nx,
+        dyn_cfg.nu,
+        dyn_cfg.u_lim,
+    )
+    if use_mj:
+        mj_model, mj_data = dyn_cfg.mj_model, dyn_cfg.mj_data
+
+    N, Q, R, H, term, mode = (
+        dmpc_cfg.N,
+        dmpc_cfg.Q,
+        dmpc_cfg.R,
+        dmpc_cfg.H,
+        dmpc_cfg.term,
+        dmpc_cfg.mode
+    )
+
+    T, dt, M, d_min, x0_val, obs, xf_val = (
+        env_cfg.T,
+        env_cfg.dt,
+        env_cfg.M,
+        env_cfg.d_min,
+        env_cfg.x0_val,
+        env_cfg.obs,
+        env_cfg.xf_val,
+    )
     
     # helpers
     def shift_pred(X):
@@ -25,9 +49,6 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
             i += 1
     
     assert mode in ("gauss-seidel", "jacobi"), f"Invalid mode: {mode}"
-
-    # disturbances, per agent
-    w = [np.random.multivariate_normal(np.zeros(nx), np.diag([sigma] * nx), T) for _ in range(M)]
 
     pred_X = np.zeros((M, nx, N + 1))
     pred_U = np.zeros((M, nu, N))
@@ -46,7 +67,7 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
         # control bounds and initial condition constraint
         opti.subject_to(X[:, 0] == x0)
         for i in range(nu):
-            opti.subject_to(opti.bounded(U_lim[i][0], U[i, :], U_lim[i][1]))
+            opti.subject_to(opti.bounded(u_lim[i][0], U[i, :], u_lim[i][1]))
 
         # obstacle constraint, center (xo,yo,zo), radius ro
         for o in obs:
@@ -64,7 +85,7 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
             J += ca.mtimes([(xk - xf).T, Q, (xk - xf)]) + ca.mtimes([uk.T, R, uk])
 
             # forward Euler
-            x_next = xk + dt * f(xk, uk)
+            x_next = xk + dt * f_plant(xk, uk)
             opti.subject_to(X[:, k + 1] == x_next)
 
             # collision avoidance with other agents' broadcast predictions
@@ -128,6 +149,9 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
             X_opt = sol.value(X)
             U_opt = sol.value(U)
             
+            J_cl[m, t] = sol.value(J)
+            wall_clk[m, t] = sol.stats()["t_wall_total"]
+            
             pred_X[m] = shift_pred(X_opt)  # update shared predictions
             pred_U[m] = shift_pred(U_opt)  # update shared predictions
 
@@ -135,26 +159,29 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, mj=False):
             ut = U_opt[:, 0].reshape((nu, 1))
 
             # apply first control, advance true states, shift warm starts, log
-            if mj:
-                xt_1 = f_np(xt, ut, w[m][t, :], mj_model, mj_data)
+            if use_mj:
+                xt_1 = f_true(m, mj_model, mj_data, ut)
+                if vis_cfg is not None:
+                    mj_vis_step(mj_data, vis_cfg)
             else:
-                xt_1 = xt + dt * f_np(xt, ut) #+ w[m][t, :].reshape(nx, 1)
+                xt_1 = xt + dt * f_true(xt, ut)
 
             x_cl[m, :, t + 1] = xt_1.flatten()
             u_cl[m, :, t] = ut.flatten()
             
             Xt[m] = xt_1.flatten()
             
-            J_cl[m, t] = sol.value(J)
-            
-            wall_clk[m, t] = sol.stats()["t_wall_total"]
 
 
     # plot
-    t_max = T * dt
-    J_cl_avg = np.mean(J_cl)
-    wall_clk_median = np.median(wall_clk)
+    print("success, exiting...")
 
-    plot_t(t_max, T, M, x_cl, u_cl, J_cl_avg, dyn, "decentralized", mode)
-    plot_xyz(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "decentralized", wall_clk_median, mode)
-    animate_xyz_gif(M, x_cl, x0_val, xf_val, J_cl_avg, obs, dyn, "decentralized", wall_clk_median, mode)
+    J_avg = np.mean(J_cl)
+    wall_clk = np.median(wall_clk)
+
+    plot_t(env_cfg, x_cl, u_cl, J_avg, name, "decentralized", mode)
+    plot_xyz(env_cfg, x_cl, J_avg, wall_clk, name, "decentralized", mode)
+    animate_xyz_gif(env_cfg, x_cl, J_avg, wall_clk, name, "decentralized", mode)
+    
+    if vis_cfg is not None: 
+        mj_cleanup(vis_cfg, name, "decentralized", mode)
