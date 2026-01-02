@@ -26,11 +26,11 @@ Both architectures support:
 
 Each agent's dynamics are defined by two functions, `f_true` and `f_plant`:
 
-- `f_true` is a NumPy function for the **true plant** dynamics.
-- `f_plant` is a CasADi function for the **plant model** dynamics used by the MPC solver. 
+- `f_true` is a NumPy function for the **true system** dynamics.
+- `f_plant` is a CasADi function for the **system model** dynamics used by the MPC solver. 
 - Note: `f_plant` and `f_true` may differ in terms of integrator choice, model fidelity (e.g., nonlinear vs. linear, full-order vs reduced-order), stochasticity, etc. 
   - In general, `f_true` should implement a high-fidelity representation of the system dynamics, including any real-world phenomenon like stochasticity, disturbances, etc.
-  - By contrast, `f_plant` can implement a low-fidelity, reduced-order, or virtual representation of the plant dynamics that the MPC solver interacts with. Ideally, this implementation should be computationally efficient to allow for real-time control.
+  - By contrast, `f_plant` should implement a low-fidelity, reduced-order, virtual, or other representation of the system dynamics. These are the dynamics that the MPC solver optimizes over. As such, this implementation should ideally be computationally simple to allow for real-time control.
 
 ### Constraints
 - **Input constraints**: Specify minimum and maximum control input values.
@@ -45,7 +45,7 @@ This repository integrates with MuJoCo for high-fidelity simulation of `f_true` 
    - `m`: Agent index.
    - `mj_model`: MuJoCo model object.
    - `mj_data`: MuJoCo data object.
-   - `u`: Control input as computed by the MPC solver.
+   - `u`: Optimal control input as computed by the MPC solver.
 3. Specify the MuJoCo XML and generate the accompanying XML configuration object:
    - Specify the complete `<body>` definition tag for a single agent.
    - Specify the input definition tag for a single agent (i.e., `<motor>`, `<general>`, etc), without the enclosing `<actuator>` tag.
@@ -96,13 +96,13 @@ python3 -m scripts.drone   # Drone dynamics
 `src/`: Source code for DMPC implementations.
 - `distributed_mpc.py`: Distributed MPC implementation.
 - `decentralized_mpc.py`: Decentralized MPC implementation (Jacobi and Gauss-Seidel).
-- `distributed_mpc_leader.py`: Distributed MPC with leader-follower architecture.
-- `decentralized_mpc_leader.py`: Decentralized MPC with leader-follower architecture.
+- `distributed_mpc_leader.py`: Distributed MPC for leader-follower tasks.
+- `decentralized_mpc_leader.py`: Decentralized MPC for leader-follower tasks.
 - `distributed_mpc_rendezvous.py`: Distributed MPC for rendezvous tasks.
 - `decentralized_mpc_rendezvous.py`: Decentralized MPC for rendezvous tasks.
 
 `utils/`:
 - `plot_utils.py`: Plotting utilities
-- `mj_utils.py`: MuJoCo utilities for XML generation, visualization, etc.
+- `mj_utils.py`: MuJoCo utilities for visualization, XML generation, etc.
 
 `run.sh`: Shell script to re-run example scripts repeatedly until all simulations complete successfully.
