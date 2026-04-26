@@ -7,6 +7,7 @@ class EnvBase:
     dt: float                   # timestep
     M: int                      # number of agents
     d_min: float                # minimum separation distance
+    d_target: float             # desired spacing for rendezvous/following
     x0_val: np.ndarray          # initial states
     obs: np.ndarray             # obstacle positions and radii
     

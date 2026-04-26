@@ -1,7 +1,8 @@
 import numpy as np
 import casadi as ca
-from utils.plot_utils import *
-from utils.mj_utils import mj_vis_step, mj_cleanup
+from utils.general_utils import cleanup
+from utils.mj_utils import mj_vis_step, mj_step_state
+from utils.mpc_utils import shift_pred, linear_warm_start, set_ipopt_solver, set_xyz_others, add_decentralized_collision_constraints
 
 def decentralized(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
     
@@ -35,18 +36,6 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
         env_cfg.obs,
         env_cfg.xf_val,
     )
-    
-    # helpers
-    def shift_pred(X):
-        return np.hstack([X[:, 1:], X[:, -1:]])
-
-    def set_xyz_others(m):
-        i = 0
-        for j in range(M):
-            if j == m:
-                continue
-            agents[m]["opti"].set_value(agents[m]["XYZ_others"][i], pred_X[j][0:3, :])
-            i += 1
     
     assert mode in ("gauss-seidel", "jacobi"), f"Invalid mode: {mode}"
 
@@ -89,8 +78,11 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
             opti.subject_to(X[:, k + 1] == x_next)
 
             # collision avoidance with other agents' broadcast predictions
-            for XYZ_m in XYZ_others:
-                opti.subject_to(ca.sumsqr(X[0:3, k] - XYZ_m[:, k]) >= d_min ** 2)
+            if k > 0:
+                add_decentralized_collision_constraints(opti, X, XYZ_others, d_min, k)
+
+        # terminal collision avoidance with other agents' broadcast predictions
+        add_decentralized_collision_constraints(opti, X, XYZ_others, d_min, N)
 
         # terminal cost
         xN = X[:, N]
@@ -101,13 +93,10 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
         # push initial interpolated predictions for warm-starting
         x0_m = x0_val[m, :].reshape(nx, 1)
         xf_m = xf_val[m, :].reshape(nx, 1)
-        pred_X[m] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
+        pred_X[m] = linear_warm_start(x0_m, xf_m, N)
 
         opti.minimize(J)
-        opts = {
-            "ipopt.print_level" : 0
-        }
-        opti.solver("ipopt", opts)
+        set_ipopt_solver(opti)
         return {"opti": opti, "X": X, "U": U, "x0": x0, "xf": xf, "XYZ_others": XYZ_others, "J" : J}
 
     # build agents and set goals
@@ -127,12 +116,12 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
 
         if mode == "jacobi":
             for m in range(M):
-                set_xyz_others(m)
+                set_xyz_others(agents, pred_X, M, m)
 
         for m in range(M):
             
             if mode == "gauss-seidel":
-                set_xyz_others(m)
+                set_xyz_others(agents, pred_X, M, m)
             
             # set initial-state parameters
             opti = agents[m]["opti"]
@@ -157,31 +146,24 @@ def decentralized(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
 
 
             ut = U_opt[:, 0].reshape((nu, 1))
+            u_cl[m, :, t] = ut.flatten()
 
-            # apply first control, advance true states, shift warm starts, log
+            # apply first control
             if use_mj:
-                xt_1 = f_true(m, mj_model, mj_data, ut)
-                if vis_cfg is not None:
-                    mj_vis_step(mj_data, vis_cfg)
+                f_true(m, mj_model, mj_data, ut)
             else:
                 xt_1 = xt + dt * f_true(xt, ut)
+                x_cl[m, :, t + 1] = xt_1.flatten()
+                Xt[m] = xt_1.flatten()
 
-            x_cl[m, :, t + 1] = xt_1.flatten()
-            u_cl[m, :, t] = ut.flatten()
-            
-            Xt[m] = xt_1.flatten()
+        if use_mj:
+            Xt = mj_step_state(mj_model, mj_data, M, nx)
+            x_cl[:, :, t + 1] = Xt
+            if vis_cfg is not None:
+                mj_vis_step(mj_data, vis_cfg)
             
 
 
     # plot
     print("success, exiting...")
-
-    J_avg = np.mean(J_cl)
-    wall_clk = np.median(wall_clk)
-
-    plot_t(env_cfg, x_cl, u_cl, J_avg, name, "decentralized", mode)
-    plot_xyz(env_cfg, x_cl, J_avg, wall_clk, name, "decentralized", mode)
-    animate_xyz_gif(env_cfg, x_cl, J_avg, wall_clk, name, "decentralized", mode)
-    
-    if vis_cfg is not None: 
-        mj_cleanup(vis_cfg, name, "decentralized", mode)
+    cleanup(env_cfg, x_cl, u_cl, J_cl, wall_clk, name, "decentralized", vis_cfg, mode)

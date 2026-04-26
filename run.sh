@@ -1,7 +1,14 @@
 #!/bin/sh
 
+use_mjpython=0
+
+if [ "$1" = "-q" ]; then
+  use_mjpython=1
+  shift
+fi
+
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 <module_name>"
+  echo "Usage: $0 [-q] <module_name>"
   exit 1
 fi
 
@@ -11,8 +18,11 @@ runs=0
 while true; do
   runs=$((runs + 1))
 
-  # python3 -m "scripts.$module"
-  mjpython -m "scripts.$module"
+  if [ "$use_mjpython" -eq 1 ]; then
+    mjpython -m "scripts.$module"
+  else
+    python3 -m "scripts.$module"
+  fi
   rc=$?
 
   echo "exit_code=$rc"

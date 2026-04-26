@@ -13,9 +13,9 @@ class VisualizationParams:
     vid_fps: float
     enable_viewer: bool
 
-    viewer: mujoco.viewer = None
-    video_cam: mujoco._structs.MjvCamera = None
-    video_renderer: mujoco.renderer.Renderer = None
+    viewer: Any = None
+    video_cam: mujoco.MjvCamera = None
+    video_renderer: mujoco.Renderer = None
     frames: list = None
     next_frame_time: float = 0.0
 

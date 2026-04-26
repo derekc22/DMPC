@@ -15,6 +15,7 @@ dependencies:
   - freetype=2.14.1
   - icu=75.1
   - imageio=2.37.0
+  - imageio-ffmpeg
   - ipopt=3.14.19
   - kiwisolver=1.4.9
   - lcms2=2.17
@@ -80,4 +81,6 @@ dependencies:
   - xorg-libxdmcp=1.1.5
   - zlib-ng=2.2.5
   - zstd=1.5.7
+  - pip:
+      - mujoco
 prefix: /opt/miniconda3/envs/dmpc

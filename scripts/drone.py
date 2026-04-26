@@ -13,7 +13,7 @@ from config.dyn_cfg import MuJoCoDynamicsParams
 from config.env_cfg import EnvParams, LeaderEnvParams, RendezvousEnvParams
 from config.xml_cfg import XMLParams
 from config.vis_cfg import VisualizationParams
-from utils.mj_utils import generate_xml, load_model, reset_model, init_vis
+from utils.mj_utils import generate_xml, load_model, reset_model, run_mj_case
 
 # =========================================================================
 # SETUP
@@ -23,12 +23,13 @@ from utils.mj_utils import generate_xml, load_model, reset_model, init_vis
 M = 3
 
 # minimum separation distance
-d_min = 0.0
+d_min = 1
+d_target = 1.5 * d_min
 
 # discretization
-dt = 0.01
-N = 400
-T = 150
+dt = 0.02
+N = 100
+T = 500
 
 # state and input dimensions
 nx = 6
@@ -62,12 +63,12 @@ pf = np.hstack([np.random.uniform(-5, 5, (M, 2)), np.random.uniform(5, 10, (M, 1
 vf = np.zeros((M, 3))   # [m/s]
 
 # input bounds [fx, fy, fz]
-f_min_x = -1.00   # [N]
-f_max_x =  1.00   # [N]
-f_min_y = -1.00   # [N]
-f_max_y =  1.00   # [N]
-f_min_z =  0.00   # [N]
-f_max_z =  5.00   # [N]
+f_min_x = -3.0  # [N]
+f_max_x =  3.0  # [N]
+f_min_y = -3.0  # [N]
+f_max_y =  3.0  # [N]
+f_min_z =  0.0  # [N]
+f_max_z = 10.0  # [N]
 
 # Rotor thrust limits for allocation/clipping (these are actuator-space limits).
 # Kept local to avoid changing non-dynamics parts of the file.
@@ -131,9 +132,9 @@ r4 = ca.DM([ 0.0,-d, 0.0])
 def f_plant(x, u):
     # x: (6,1), u: (3,1)  ->  dx: (6,1)
     # unpack
-    v     = x[3:]     # 3x1
+    v = x[3:] # 3x1
     
-    g_col    = ca.DM([[0.0], [0.0], [-g_val]]) # 3x1
+    g_col = ca.DM([[0.0], [0.0], [-g_val]]) # 3x1
 
     # state derivative, order matches the state
     dx = ca.vertcat(
@@ -249,7 +250,7 @@ def allocate_thrust_torque_to_rotors(T: float,
 
 
 def f_true(m, mj_model, mj_data, mu):
-    """True mujoco step with a low-level geometric controller.
+    """Set MuJoCo controls with a low-level geometric controller.
 
     IMPORTANT CONSISTENCY:
     The reduced model used by MPC is:
@@ -299,13 +300,6 @@ def f_true(m, mj_model, mj_data, mu):
 
     ctrl_start = int(m) * int(na)
     mj_data.ctrl[ctrl_start:ctrl_start + na] = rotor_f
-    mujoco.mj_step(mj_model, mj_data)
-
-    xpos = mj_data.qpos.reshape(M, nq)[m]
-    xvel = mj_data.qvel.reshape(M, nv)[m]
-
-    x = np.hstack([xpos[:3], xvel[:3]])
-    return x  # (6,)
 
 
 
@@ -346,7 +340,7 @@ mj_model, mj_data = load_model(xml)
 reset_model(mj_model, mj_data)
 
 presets = {
-    "distance": 2, 
+    "distance": 5, 
     "azimuth": 0, 
     "elevation": -30
 }
@@ -356,10 +350,8 @@ vis_cfg = VisualizationParams(presets=presets,
                               show_body_csys=True, 
                               vid_width=1280, 
                               vid_height=720,
-                              vid_fps=30.0,
+                              vid_fps=1/dt,
                               enable_viewer=False)
-
-init_vis(mj_model, mj_data, vis_cfg=vis_cfg)
 
 
 
@@ -374,18 +366,23 @@ decentr_cfg_gauss = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="ga
 decentr_cfg_jacbi = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="jacobi")
 distr_cfg = DistributedParams(N=N, Q=Q, R=R, H=H, term=False)
 
-rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, obs=obs)
-ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs)
-env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val=xf_val, obs=obs)
+rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, d_target=d_target, x0_val=x0_val, obs=obs)
+ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, d_target=d_target, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs)
+env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, d_target=d_target, x0_val=x0_val, xf_val=xf_val, obs=obs)
 
-decentralized_rendezvous(dyn_mj_cfg, decentr_cfg_gauss, rndzvs_env_cfg, use_mj=True, vis_cfg=vis_cfg)
-decentralized_rendezvous(dyn_mj_cfg, decentr_cfg_jacbi, rndzvs_env_cfg, use_mj=True, vis_cfg=vis_cfg)
-distributed_rendezvous(dyn_mj_cfg, distr_cfg, rndzvs_env_cfg, use_mj=True, vis_cfg=vis_cfg)
 
-decentralized_leader(dyn_mj_cfg, decentr_cfg_gauss, ldr_env_cfg, use_mj=True, vis_cfg=vis_cfg)
-decentralized_leader(dyn_mj_cfg, decentr_cfg_jacbi, ldr_env_cfg, use_mj=True, vis_cfg=vis_cfg)
-distributed_leader(dyn_mj_cfg, distr_cfg, ldr_env_cfg, use_mj=True, vis_cfg=vis_cfg)
 
-decentralized(dyn_mj_cfg, decentr_cfg_gauss, env_cfg, use_mj=True, vis_cfg=vis_cfg)
-decentralized(dyn_mj_cfg, decentr_cfg_jacbi, env_cfg, use_mj=True, vis_cfg=vis_cfg)
-distributed(dyn_mj_cfg, distr_cfg, env_cfg, use_mj=True, vis_cfg=vis_cfg)
+# =========================================================================
+# RUN
+# =========================================================================
+run_mj_case(decentralized_rendezvous, mj_model, mj_data, vis_cfg, dyn_mj_cfg, decentr_cfg_gauss, rndzvs_env_cfg)
+run_mj_case(decentralized_rendezvous, mj_model, mj_data, vis_cfg, dyn_mj_cfg, decentr_cfg_jacbi, rndzvs_env_cfg)
+run_mj_case(distributed_rendezvous, mj_model, mj_data, vis_cfg, dyn_mj_cfg, distr_cfg, rndzvs_env_cfg)
+
+run_mj_case(decentralized_leader, mj_model, mj_data, vis_cfg, dyn_mj_cfg, decentr_cfg_gauss, ldr_env_cfg)
+run_mj_case(decentralized_leader, mj_model, mj_data, vis_cfg, dyn_mj_cfg, decentr_cfg_jacbi, ldr_env_cfg)
+run_mj_case(distributed_leader, mj_model, mj_data, vis_cfg, dyn_mj_cfg, distr_cfg, ldr_env_cfg)
+
+run_mj_case(decentralized, mj_model, mj_data, vis_cfg, dyn_mj_cfg, decentr_cfg_gauss, env_cfg)
+run_mj_case(decentralized, mj_model, mj_data, vis_cfg, dyn_mj_cfg, decentr_cfg_jacbi, env_cfg)
+run_mj_case(distributed, mj_model, mj_data, vis_cfg, dyn_mj_cfg, distr_cfg, env_cfg)

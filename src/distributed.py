@@ -1,7 +1,8 @@
 import numpy as np
 import casadi as ca
-from utils.plot_utils import *
-from utils.mj_utils import mj_vis_step, mj_cleanup
+from utils.general_utils import cleanup
+from utils.mj_utils import mj_vis_step, mj_step_state
+from utils.mpc_utils import shift_pred, linear_warm_start, set_ipopt_solver, add_distributed_collision_constraints
 
 def distributed(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
     
@@ -35,10 +36,6 @@ def distributed(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
         env_cfg.xf_val,
     )
 
-    # helpers
-    def shift_pred(X):
-        return np.hstack([X[:, 1:], X[:, -1:]])
-    
     pred_X = np.zeros((M * nx, N + 1))
     pred_U = np.zeros((M * nu, N))
 
@@ -80,10 +77,11 @@ def distributed(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
                 opti.subject_to(X[nx * m : nx * (m + 1), k + 1] == x_next)
 
                 # collision avoidance, pairwise
-                for j in range(m + 1, M):
-                    xz = X[nx * m : nx * m + 3, k]
-                    xj = X[nx * j : nx * j + 3, k]
-                    opti.subject_to(ca.sumsqr(xz - xj) >= d_min ** 2)
+                if k > 0:
+                    add_distributed_collision_constraints(opti, X, M, nx, d_min, k, m=m)
+
+        # terminal collision avoidance, pairwise
+        add_distributed_collision_constraints(opti, X, M, nx, d_min, N)
 
         # terminal cost
         for m in range(M):
@@ -97,13 +95,10 @@ def distributed(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
         for m in range(M):
             x0_m = x0_val[m, :].reshape(nx, 1)
             xf_m = xf_val[m, :].reshape(nx, 1)
-            pred_X[nx * m : nx * (m + 1), :] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
+            pred_X[nx * m : nx * (m + 1), :] = linear_warm_start(x0_m, xf_m, N)
         
         opti.minimize(J)
-        opts = {
-            "ipopt.print_level" : 0
-        }
-        opti.solver("ipopt", opts)
+        set_ipopt_solver(opti)
         return {"opti": opti, "X": X, "U": U, "x0": x0, "xf": xf, "J" : J}
 
     planner = build_central_opti()
@@ -143,32 +138,25 @@ def distributed(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
         
         for m in range(M):
             ut = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
+            u_cl[m, :, t] = ut.flatten()
 
-            # apply first control, advance true states, shift warm starts, log
+            # apply first control
             xt = Xt[m].reshape((nx, 1))
             if use_mj:
-                xt_1 = f_true(m, mj_model, mj_data, ut)
-                if vis_cfg is not None:
-                    mj_vis_step(mj_data, vis_cfg)
+                f_true(m, mj_model, mj_data, ut)
             else:
                 xt_1 = xt + dt * f_true(xt, ut)
+                x_cl[m, :, t + 1] = xt_1.flatten()
+                Xt[m] = xt_1.flatten()
 
-            x_cl[m, :, t + 1] = xt_1.flatten()
-            u_cl[m, :, t] = ut.flatten()
-            
-            Xt[m] = xt_1.flatten()
+        if use_mj:
+            Xt = mj_step_state(mj_model, mj_data, M, nx)
+            x_cl[:, :, t + 1] = Xt
+            if vis_cfg is not None:
+                mj_vis_step(mj_data, vis_cfg)
             
 
             
     # plot
     print("success, exiting...")
-
-    J_avg = np.mean(J_cl)/M
-    wall_clk = np.median(wall_clk)
-
-    plot_t(env_cfg, x_cl, u_cl, J_avg, name, "distributed")
-    plot_xyz(env_cfg, x_cl, J_avg, wall_clk, name, "distributed", )
-    animate_xyz_gif(env_cfg, x_cl, J_avg, wall_clk, name, "distributed", )
-    
-    if vis_cfg is not None: 
-        mj_cleanup(vis_cfg, name, "distributed")
+    cleanup(env_cfg, x_cl, u_cl, J_cl, wall_clk, name, "distributed", vis_cfg, normalize_J_by_M=True)
