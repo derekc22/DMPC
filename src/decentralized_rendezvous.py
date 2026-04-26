@@ -1,7 +1,8 @@
 import numpy as np
 import casadi as ca
-from utils.plot_utils import *
-from utils.mj_utils import mj_vis_step, mj_cleanup
+from utils.general_utils import cleanup
+from utils.mj_utils import mj_vis_step, mj_step_state
+from utils.mpc_utils import shift_pred, linear_warm_start, set_ipopt_solver, sphere_target, sphere_target_np, set_xyz_others, add_decentralized_collision_constraints
 
 def decentralized_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
     
@@ -26,33 +27,16 @@ def decentralized_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=N
         dmpc_cfg.mode
     )
 
-    T, dt, M, d_min, x0_val, obs = (
+    T, dt, M, d_min, d_target, x0_val, obs = (
         env_cfg.T,
         env_cfg.dt,
         env_cfg.M,
         env_cfg.d_min,
+        env_cfg.d_target,
         env_cfg.x0_val,
         env_cfg.obs,
     )
     
-    # helpers
-    def shift_pred(X):
-        return np.hstack([X[:, 1:], X[:, -1:]])
-
-    def sphere_target(x_self, x_other, radius):
-        # compute closest point on sphere of radius d_min around x_other to x_self
-        diff = x_other - x_self
-        dist = ca.sqrt(ca.dot(diff, diff) + 1e-6)  # magnitude
-        return x_other - radius * diff / dist
-
-    def set_xyz_others(m):
-        i = 0
-        for j in range(M):
-            if j == m:
-                continue
-            agents[m]["opti"].set_value(agents[m]["XYZ_others"][i], pred_X[j][0:3, :])
-            i += 1
-            
     def set_xf(xt_val_others):
         xt_val = np.roll(xt_val_others, shift=shift, axis=0)  # shift rows
         for m in range(M):
@@ -96,7 +80,7 @@ def decentralized_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=N
             uk = U[:, k]
             
             # agents target sphere surface around other agents
-            xk_target = ca.vertcat(sphere_target(xk[0:3], xf[0:3], d_min), xf[3:])
+            xk_target = ca.vertcat(sphere_target(xk[0:3], xf[0:3], d_target), xf[3:])
             J += ca.mtimes([(xk - xk_target).T, Q, (xk - xk_target)]) + ca.mtimes([uk.T, R, uk])
 
             # forward Euler
@@ -104,29 +88,29 @@ def decentralized_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=N
             opti.subject_to(X[:, k + 1] == x_next)
 
             # collision avoidance with other agents' broadcast predictions
-            for XYZ_m in XYZ_others:
-                opti.subject_to(ca.sumsqr(X[0:3, k] - XYZ_m[:, k]) >= d_min ** 2)
+            if k > 0:
+                add_decentralized_collision_constraints(opti, X, XYZ_others, d_min, k)
+
+        # terminal collision avoidance with other agents' broadcast predictions
+        add_decentralized_collision_constraints(opti, X, XYZ_others, d_min, N)
 
         # terminal cost
         # agents target sphere surface around other agents
         xN = X[:, N]
-        xN_target = ca.vertcat(sphere_target(xN[0:3], xf[0:3], d_min), xf[3:])
+        xN_target = ca.vertcat(sphere_target(xN[0:3], xf[0:3], d_target), xf[3:])
         J += ca.mtimes([(xN - xN_target).T, H, (xN - xN_target)])
         if term:
             # terminal constraint
-            opti.subject_to(ca.sumsqr(xN[0:3] - xf[0:3]) == d_min ** 2) # be at distance d_min from target agent
+            opti.subject_to(ca.sumsqr(xN[0:3] - xf[0:3]) == d_target ** 2) # be at target distance from target agent
             opti.subject_to(xN[3:] == xf[3:])
 
         # push initial interpolated predictions for warm-starting
         x0_m = x0_val[m, :].reshape(nx, 1)
-        xf_m = xf_val.reshape(nx, 1)
-        pred_X[m] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
+        xf_m = sphere_target_np(x0_m, xf_val, d_target)
+        pred_X[m] = linear_warm_start(x0_m, xf_m, N)
 
         opti.minimize(J)
-        opts = {
-            "ipopt.print_level" : 0
-        }
-        opti.solver("ipopt", opts)
+        set_ipopt_solver(opti)
         return {"opti": opti, "X": X, "U": U, "x0": x0, "xf": xf, "XYZ_others": XYZ_others, "J" : J}
 
     # build agents and set goals
@@ -152,12 +136,12 @@ def decentralized_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=N
         
         if mode == "jacobi":
             for m in range(M):
-                set_xyz_others(m)
+                set_xyz_others(agents, pred_X, M, m)
 
         for m in range(M):
             
             if mode == "gauss-seidel":
-                set_xyz_others(m)
+                set_xyz_others(agents, pred_X, M, m)
                 
             # set initial-state parameters
             opti = agents[m]["opti"]
@@ -182,33 +166,26 @@ def decentralized_rendezvous(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=N
 
 
             ut = U_opt[:, 0].reshape((nu, 1))
+            u_cl[m, :, t] = ut.flatten()
 
-            # apply first control, advance true states, shift warm starts, log
+            # apply first control
             if use_mj:
-                xt_1 = f_true(m, mj_model, mj_data, ut)
-                if vis_cfg is not None:
-                    mj_vis_step(mj_data, vis_cfg)
+                f_true(m, mj_model, mj_data, ut)
             else:
                 xt_1 = xt + dt * f_true(xt, ut)
+                x_cl[m, :, t + 1] = xt_1.flatten()
+                Xt[m] = xt_1.flatten()
 
-            x_cl[m, :, t + 1] = xt_1.flatten()
-            u_cl[m, :, t] = ut.flatten()
-            
-            Xt[m] = xt_1.flatten()
-            
-            xt_val_others = Xt
+        if use_mj:
+            Xt = mj_step_state(mj_model, mj_data, M, nx)
+            x_cl[:, :, t + 1] = Xt
+            if vis_cfg is not None:
+                mj_vis_step(mj_data, vis_cfg)
+
+        xt_val_others = Xt
 
 
 
     # plot
     print("success, exiting...")
-
-    J_avg = np.mean(J_cl)
-    wall_clk = np.median(wall_clk)
-
-    plot_t(env_cfg, x_cl, u_cl, J_avg, name, "decentralized_rendezvous", mode)
-    plot_xyz(env_cfg, x_cl, J_avg, wall_clk, name, "decentralized_rendezvous", mode)
-    animate_xyz_gif(env_cfg, x_cl, J_avg, wall_clk, name, "decentralized_rendezvous", mode)
-    
-    if vis_cfg is not None: 
-        mj_cleanup(vis_cfg, name, "decentralized_rendezvous", mode)
+    cleanup(env_cfg, x_cl, u_cl, J_cl, wall_clk, name, "decentralized_rendezvous", vis_cfg, mode)

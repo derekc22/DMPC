@@ -19,6 +19,7 @@ M = 2
 
 # minimum separation distance
 d_min = 0.1
+d_target = 1.5 * d_min
 
 # discretization
 dt = 0.5
@@ -117,7 +118,7 @@ def f_true(x, u):
 
 
 # =========================================================================
-# MPC CALLS
+# CONFIGS
 # =========================================================================
 dyn_np_cfg = DynamicsParams(name="bicycle", f_plant=f_plant, f_true=f_true, nx=nx, nu=nu, u_lim=u_lim)
 
@@ -125,11 +126,15 @@ decentr_cfg_gauss = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="ga
 decentr_cfg_jacbi = DecentralizedParams(N=N, Q=Q, R=R, H=H, term=False, mode="jacobi")
 distr_cfg = DistributedParams(N=N, Q=Q, R=R, H=H, term=False)
 
-rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, obs=obs)
-ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs)
-env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, x0_val=x0_val, xf_val=xf_val, obs=obs)
+rndzvs_env_cfg = RendezvousEnvParams(T=T, dt=dt, M=M, d_min=d_min, d_target=d_target, x0_val=x0_val, obs=obs)
+ldr_env_cfg = LeaderEnvParams(T=T, dt=dt, M=M, d_min=d_min, d_target=d_target, x0_val=x0_val, xf_val_leader=xf_val[0, :], obs=obs)
+env_cfg = EnvParams(T=T, dt=dt, M=M, d_min=d_min, d_target=d_target, x0_val=x0_val, xf_val=xf_val, obs=obs)
 
 
+
+# =========================================================================
+# RUN
+# =========================================================================
 decentralized_rendezvous(dyn_np_cfg, decentr_cfg_gauss, rndzvs_env_cfg)
 decentralized_rendezvous(dyn_np_cfg, decentr_cfg_jacbi, rndzvs_env_cfg)
 distributed_rendezvous(dyn_np_cfg, distr_cfg, rndzvs_env_cfg)

@@ -1,6 +1,9 @@
 import mujoco
+import mujoco.viewer
 import imageio
 import os
+import numpy as np
+from typing import Any
 from config.xml_cfg import XMLParams
 from config.vis_cfg import VisualizationParams
 
@@ -15,8 +18,21 @@ def reset_model(m: mujoco.MjModel,
     key_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_KEY, keyframe)
     mujoco.mj_resetDataKeyframe(m, d, key_id)
     mujoco.mj_forward(m, d)
+
+def mj_state(d: mujoco.MjData, M: int, nx: int) -> np.ndarray:
+    qpos = d.qpos.reshape(M, -1)
+    qvel = d.qvel.reshape(M, -1)
+
+    x = np.zeros((M, nx), dtype=float)
+    x[:, 0:3] = qpos[:, 0:3]
+    x[:, 3:6] = qvel[:, 0:3]
+    return x
+
+def mj_step_state(m: mujoco.MjModel, d: mujoco.MjData, M: int, nx: int) -> np.ndarray:
+    mujoco.mj_step(m, d)
+    return mj_state(d, M, nx)
     
-def set_viewer(viewer: mujoco.viewer,
+def set_viewer(viewer: Any,
                track: bool,
                presets: dict,
                show_world_csys: bool,
@@ -185,6 +201,16 @@ def init_vis(
     vis_cfg.video_cam = video_cam
     vis_cfg.video_renderer = video_renderer
     vis_cfg.frames = []
+    vis_cfg.next_frame_time = 0.0
+
+def run_mj_case(fn: Any,
+                mj_model: mujoco.MjModel,
+                mj_data: mujoco.MjData,
+                vis_cfg: VisualizationParams,
+                *args) -> None:
+    reset_model(mj_model, mj_data)
+    init_vis(mj_model, mj_data, vis_cfg=vis_cfg)
+    fn(*args, use_mj=True, vis_cfg=vis_cfg)
 
 
 def mj_vis_step(d: mujoco.MjData,

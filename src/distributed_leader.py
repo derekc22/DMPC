@@ -1,7 +1,8 @@
 import numpy as np
 import casadi as ca
-from utils.plot_utils import *
-from utils.mj_utils import mj_vis_step, mj_cleanup
+from utils.general_utils import cleanup
+from utils.mj_utils import mj_vis_step, mj_step_state
+from utils.mpc_utils import shift_pred, linear_warm_start, set_ipopt_solver, sphere_target, sphere_target_np, add_distributed_collision_constraints
 
 def distributed_leader(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
     
@@ -25,26 +26,17 @@ def distributed_leader(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
         dmpc_cfg.term,
     )
 
-    T, dt, M, d_min, x0_val, obs, xf_val_leader = (
+    T, dt, M, d_min, d_target, x0_val, obs, xf_val_leader = (
         env_cfg.T,
         env_cfg.dt,
         env_cfg.M,
         env_cfg.d_min,
+        env_cfg.d_target,
         env_cfg.x0_val,
         env_cfg.obs,
         env_cfg.xf_val_leader,
     )
 
-    # helpers
-    def shift_pred(X):
-        return np.hstack([X[:, 1:], X[:, -1:]])
-    
-    def sphere_target(x_self, x_other, radius):
-        # compute closest point on sphere of radius d_min around x_other to x_self
-        diff = x_other - x_self
-        dist = ca.sqrt(ca.dot(diff, diff) + 1e-6)  # magnitude
-        return x_other - radius * diff / dist
-    
     def set_xf(xt_val_leader):
         xt_val = np.vstack([ xf_val_leader.reshape(nx, 1), np.tile(xt_val_leader.reshape(nx, 1), (M-1, 1)) ])
         planner["opti"].set_value(planner["xf"], xt_val)
@@ -90,7 +82,7 @@ def distributed_leader(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
                     J += ca.mtimes([(xk - xf_m).T, Q, (xk - xf_m)]) + ca.mtimes([uk.T, R, uk])
                 else:
                     # followers target sphere surface around leader
-                    xk_target = ca.vertcat(sphere_target(xk[0:3], xf_m[0:3], d_min), xf_m[3:])
+                    xk_target = ca.vertcat(sphere_target(xk[0:3], xf_m[0:3], d_target), xf_m[3:])
                     J += ca.mtimes([(xk - xk_target).T, Q, (xk - xk_target)]) + ca.mtimes([uk.T, R, uk])
 
                 # forward Euler
@@ -98,10 +90,11 @@ def distributed_leader(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
                 opti.subject_to(X[nx * m : nx * (m + 1), k + 1] == x_next)
 
                 # collision avoidance, pairwise
-                for j in range(m + 1, M):
-                    xz = X[nx * m : nx * m + 3, k]
-                    xj = X[nx * j : nx * j + 3, k]
-                    opti.subject_to(ca.sumsqr(xz - xj) >= d_min ** 2)
+                if k > 0:
+                    add_distributed_collision_constraints(opti, X, M, nx, d_min, k, m=m)
+
+        # terminal collision avoidance, pairwise
+        add_distributed_collision_constraints(opti, X, M, nx, d_min, N)
 
         # terminal cost
         for m in range(M):
@@ -114,28 +107,25 @@ def distributed_leader(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
                     opti.subject_to(xN == xfN) # terminal constraint, xf
             else:
                 # followers target sphere surface around leader
-                xN_target = ca.vertcat(sphere_target(xN[0:3], xfN[0:3], d_min), xfN[3:])
+                xN_target = ca.vertcat(sphere_target(xN[0:3], xfN[0:3], d_target), xfN[3:])
                 J += ca.mtimes([(xN - xN_target).T, H, (xN - xN_target)])
                 if term:
                     # terminal constraint
-                    opti.subject_to(ca.sumsqr(xN[0:3] - xfN[0:3]) == d_min ** 2) # be at distance d_min from leader
+                    opti.subject_to(ca.sumsqr(xN[0:3] - xfN[0:3]) == d_target ** 2) # be at target distance from leader
                     opti.subject_to(xN[3:] == xfN[3:])
 
         # push initial interpolated predictions for warm-starting
         x0_leader = x0_val_leader
         xf_leader = xf_val_leader.reshape(nx, 1)
-        pred_X[nx * 0 : nx * (0 + 1), :] = np.hstack([x0_leader + (k / float(N)) * (xf_leader - x0_leader) for k in range(N + 1)])
+        pred_X[nx * 0 : nx * (0 + 1), :] = linear_warm_start(x0_leader, xf_leader, N)
         
         for m in range(1, M):
             x0_m = x0_val[m, :].reshape(nx, 1)
-            xf_m = x0_val_leader
-            pred_X[nx * m : nx * (m + 1), :] = np.hstack([x0_m + (k / float(N)) * (xf_m - x0_m) for k in range(N + 1)])
+            xf_m = sphere_target_np(x0_m, x0_val_leader, d_target)
+            pred_X[nx * m : nx * (m + 1), :] = linear_warm_start(x0_m, xf_m, N)
         
         opti.minimize(J)
-        opts = {
-            "ipopt.print_level" : 0
-        }
-        opti.solver("ipopt", opts)
+        set_ipopt_solver(opti)
         return {"opti": opti, "X": X, "U": U, "x0": x0, "xf": xf, "J" : J}
 
     planner = build_central_opti()
@@ -180,35 +170,27 @@ def distributed_leader(dyn_cfg, dmpc_cfg, env_cfg, use_mj=False, vis_cfg=None):
 
         for m in range(M):
             ut = U_opt[nu * m : nu * (m + 1), 0].reshape((nu, 1))
+            u_cl[m, :, t] = ut.flatten()
 
-            # apply first control, advance true states, shift warm starts, log
+            # apply first control
             xt = Xt[m].reshape((nx, 1))
             if use_mj:
-                xt_1 = f_true(m, mj_model, mj_data, ut)
-                if vis_cfg is not None:
-                    mj_vis_step(mj_data, vis_cfg)
+                f_true(m, mj_model, mj_data, ut)
             else:
                 xt_1 = xt + dt * f_true(xt, ut)
+                x_cl[m, :, t + 1] = xt_1.flatten()
+                Xt[m] = xt_1.flatten()
 
-            x_cl[m, :, t + 1] = xt_1.flatten()
-            u_cl[m, :, t] = ut.flatten()
-            
-            Xt[m] = xt_1.flatten()
-            
-            if m == 0:
-                xt_val_leader = Xt[0]
+        if use_mj:
+            Xt = mj_step_state(mj_model, mj_data, M, nx)
+            x_cl[:, :, t + 1] = Xt
+            if vis_cfg is not None:
+                mj_vis_step(mj_data, vis_cfg)
+
+        xt_val_leader = Xt[0]
             
 
             
     # plot
     print("success, exiting...")
-
-    J_avg = np.mean(J_cl)/M
-    wall_clk = np.median(wall_clk)
-
-    plot_t(env_cfg, x_cl, u_cl, J_avg, name, "distributed_leader")
-    plot_xyz(env_cfg, x_cl, J_avg, wall_clk, name, "distributed_leader")
-    animate_xyz_gif(env_cfg, x_cl, J_avg, wall_clk, name, "distributed_leader")
-    
-    if vis_cfg is not None: 
-        mj_cleanup(vis_cfg, name, "distributed_leader")
+    cleanup(env_cfg, x_cl, u_cl, J_cl, wall_clk, name, "distributed_leader", vis_cfg, normalize_J_by_M=True)
