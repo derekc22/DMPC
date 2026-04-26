@@ -11,8 +11,8 @@ This project implements Distributed and Decentralized Model Predictive Control (
 ## Features
 
 ### Control Architectures
-There are two main architectures for DMPC implemented
-- **Distributed**: Single, centralized solver solves a global optimization problem. More computationally intensive but may yield better performance.
+This project implements two main DMPC architectures:
+- **Distributed**: A single, centralized solver solves a global optimization problem. More computationally intensive but may yield better performance.
 - **Decentralized**: Agents solve local optimization problems and share solutions. Less computationally intensive but may yield suboptimal performance.
   - *Jacobi*: Agents' solutions are shared after each horizon iteration.
   - *Gauss-Seidel*: Agents' solutions are shared immediately after each agent's update.
@@ -35,7 +35,7 @@ Each agent's dynamics are defined by two functions, `f_true` and `f_plant`:
 ### Constraints
 - **Input constraints**: Specify minimum and maximum control input values.
 - **Inter-agent collision avoidance**: Specify minimum distance between agents.
-- **Obstacle avoidance**: Place static, spherical obstacles in the environment (with dynamic obstacles planned).
+- **Obstacle avoidance**: Place static, spherical obstacles in the environment (with dynamic obstacles planned for future work).
 
 ### MuJoCo Integration
 This repository integrates with MuJoCo for high-fidelity simulation of `f_true` dynamics. To make use of this feature:
@@ -61,9 +61,6 @@ This repository integrates with MuJoCo for high-fidelity simulation of `f_true` 
   - `f_plant` implements reduced-order (6-state) quadcopter dynamics (with forward Euler integration) for virtual input computation.
   - `f_true` uses MuJoCo to obtain full-state quadcopter dynamics.
 
-### State Estimation
-Planned.
-
 ## Installation
 
 Create and activate the conda environment:
@@ -73,18 +70,35 @@ conda activate dmpc
 ```
 
 ## Usage
+All figures and videos are saved to the `figures/` directory.
 
-Run the `<model>.py` scripts. Figures are saved to the `figures/` directory.
-```bash
-python3 -m scripts.bicycle # Bicycle dynamics
-python3 -m scripts.dbl_int # Double integrator dynamics
-python3 -m scripts.drone   # Drone dynamics
+To run without MuJoCo visualization:
+  
+- Run the `<model>.py` scripts with python:
+  ```bash
+  python3 -m scripts.bicycle # Bicycle example
+  python3 -m scripts.dbl_int # Double integrator example
+  python3 -m scripts.drone   # Drone example
+  ```
 
-# Or, to re-run simulations until successful completion:
-./run.sh bicycle
-./run.sh dbl_int
-./run.sh drone
-```
+- Or, to re-run simulations until successful completion:
+  ```
+  ./run.sh bicycle
+  ./run.sh dbl_int
+  ./run.sh drone
+  ```
+To run with MuJoCo visualization:
+
+*Note: currently, only the "drone" example supports MuJoCo*
+  
+- Set `enable_viewer=True` and run the `<model>.py` scripts with `mjpython`:
+    ```bash
+    mjpython -m scripts.drone   # Drone example
+    ```
+- Or, to re-run simulations until successful completion:
+    ```
+    ./run.sh -v drone
+    ```
 
 ## Structure
 
@@ -94,15 +108,17 @@ python3 -m scripts.drone   # Drone dynamics
 - `drone.py`: Example script for drone dynamics.
 
 `src/`: Source code for DMPC implementations.
-- `distributed_mpc.py`: Distributed MPC implementation.
-- `decentralized_mpc.py`: Decentralized MPC implementation (Jacobi and Gauss-Seidel).
-- `distributed_mpc_leader.py`: Distributed MPC for leader-follower tasks.
-- `decentralized_mpc_leader.py`: Decentralized MPC for leader-follower tasks.
-- `distributed_mpc_rendezvous.py`: Distributed MPC for rendezvous tasks.
-- `decentralized_mpc_rendezvous.py`: Decentralized MPC for rendezvous tasks.
+- `distributed.py`: Distributed MPC implementation.
+- `decentralized.py`: Decentralized MPC implementation (Jacobi and Gauss-Seidel).
+- `distributed_leader.py`: Distributed MPC for leader-follower tasks.
+- `decentralized_leader.py`: Decentralized MPC for leader-follower tasks.
+- `distributed_rendezvous.py`: Distributed MPC for rendezvous tasks.
+- `decentralized_rendezvous.py`: Decentralized MPC for rendezvous tasks.
 
 `utils/`:
 - `plot_utils.py`: Plotting utilities
 - `mj_utils.py`: MuJoCo utilities for visualization, XML generation, etc.
 
-`run.sh`: Shell script to re-run example scripts repeatedly until all simulations complete successfully.
+`run.sh`: Shell script to re-run example scripts until all simulations complete successfully.
+
+`figures/`: Directory where generated figures and videos are saved.

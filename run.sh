@@ -2,13 +2,13 @@
 
 use_mjpython=0
 
-if [ "$1" = "-q" ]; then
+if [ "$1" = "-v" ]; then
   use_mjpython=1
   shift
 fi
 
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 [-q] <module_name>"
+  echo "Usage: $0 [-v] <module_name>"
   exit 1
 fi
 
